@@ -1,0 +1,81 @@
+# krono-job 调度任务定义（声明式，不落库；PLAN §五）
+#
+# 字段说明见 PLAN.md §5.3。${ENV} 在启动时替换为环境变量（headers/metadata/endpoint 等）。
+# 修改本文件后无需重启服务：调度内核通过 fsnotify 热重载（增/删/改自动生效）。
+# 若 YAML 解析失败，保留上次有效配置并记错误日志，不影响运行。
+
+jobs:
+  # ---- HTTP 任务示例（纯配置，无需写对接代码）----
+#   - name: 订单超时自动取消
+#     task_type: order_timeout_cancel   # 全局唯一，写入 job_exec_log.task_type / Redis 暂停态成员
+#     cron: "0 */5 * * *"               # 每 5 分钟触发一次
+#     protocol: http
+#     enabled: true
+#     timeout: 30s                      # 单次调用超时，超时按失败处理
+#     retry: 3                          # Asynq 最大重试次数（默认 0）
+#     endpoint: "http://order-svc:8080/api/timeout/cancel"
+#     method: POST
+#     headers:
+#       Authorization: "Bearer ${ORDER_SVC_TOKEN}"   # 支持 ${ENV} 引用环境变量
+#       X-Source: "krono-job"
+#     payload:
+#       scene: "auto_expire"
+#       batch_size: 100
+
+  # ---- gRPC 任务示例（参数全在 yaml，代码仅一行 import _ 注册 pb 描述符）----
+#   - name: 商品库存同步
+#     task_type: product_stock_sync
+#     cron: "0 2 * * *"                 # 每天凌晨 2 点触发
+#     protocol: grpc
+#     enabled: true
+#     timeout: 60s
+#     retry: 2
+#     endpoint: "product-svc:9000"      # host:port
+#     grpc_service: "mall.Product"      # 包.服务
+#     grpc_method: "SyncStock"          # 方法名 -> /mall.Product/SyncStock
+#     request_type: "mall.ProductSyncStockRequest"  # 通用适配器据此反序列化 payload
+#     payload:
+#       warehouse_id: 1001
+#       full_sync: true
+#     metadata:
+#       authorization: "Bearer ${PRODUCT_SVC_TOKEN}"
+#       x-krono-task: "product_stock_sync"
+
+  # ---- 暂时停用示例（enabled: false 不注册，可随时改为 true 热启用）----
+#   - name: 营销券过期清理
+#     task_type: coupon_expire_cleanup
+#     cron: "0 4 * * *"
+#     protocol: http
+#     enabled: false
+#     timeout: 30s
+#     endpoint: "http://coupon-svc:8080/api/expire/cleanup"
+#     method: POST
+
+  # ---- 测试任务：调用 sdc.Invoke/RefreshUserToken 刷新用户 token（每 30 分钟触发）----
+  - name: 南阳盛世门禁-刷新用户token
+    task_type: sdc_refresh_user_token
+    cron: "0,30 * * * *"                 # 每 30 分钟触发一次（每小时的 0 分与 30 分）；asynq 为标准 5 字段 cron：分 时 日 月 周
+    protocol: grpc
+    enabled: true
+    timeout: 30s
+    retry: 0                          # 测试期不重试，失败立即落日志方便定位
+    endpoint: "192.168.31.45:20001"  # 下游 host:port，请通过环境变量注入或直接改为实际地址
+    grpc_service: "sdc.Invoke"        # 包.服务
+    grpc_method: "RefreshUserToken"   # -> /sdc.Invoke/RefreshUserToken
+    request_type: "sdc.RefreshUserTokenReq"
+    payload:
+      uid: ""
+      refresh_token: ""
+    metadata:
+      x-krono-task: ""
+
+  # ---- 调试任务：用于排查「定时任务为何不生效」（GET 无参，每分钟触发）----
+  - name: 调试-Http接口配置探测
+    task_type: debug_ui_config_probe
+    cron: "* * * * *"               # 每分钟触发一次，便于快速观察是否真的被执行
+    protocol: http
+    enabled: true
+    timeout: 30s
+    retry: 0                        # 不重试，失败立即落 failed 日志，方便定位问题
+    endpoint: "https://one.haiqiu.top:12345/admin/api/v1/ui/config"
+    method: GET                     # GET 请求，无任何参数、无请求体

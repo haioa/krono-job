@@ -1,0 +1,16 @@
+# 构建上下文忽略项
+.git
+.codebuddy
+server.exe
+*.exe
+# 前端：交由 Docker 内的多阶段重新安装与构建，不带入本地依赖/产物
+web/node_modules
+web/dist
+# 编辑器 / 系统
+.idea
+.vscode
+*.swp
+.DS_Store
+# 测试与文档（非运行时必需）
+**/*_test.go
+**/*.md

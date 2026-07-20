@@ -1,0 +1,39 @@
+# krono-job 主配置
+# 敏感信息与运行环境相关项统一通过环境变量注入（.env 或 KRONO_*），
+# 本文件中的值均为「非敏感默认值 / 示例值」。变量命名：KRONO_<SECTION>_<KEY>（. 换成 _），
+# 详见仓库根目录 .env.example。
+#
+# 覆盖规则（优先级由高到低）：
+#   1. 环境变量（KRONO_* 或 .env 文件）—— 若某变量有值，将覆盖下方同名默认值；
+#   2. 本文件中的默认值 / 示例值 —— 仅当对应环境变量未设置时生效。
+# 因此你可以直接使用示例值本地快速启动；生产环境只需在 .env 中设置真实值即可覆盖，
+# 示例值不会被使用，不影响正常运行。
+
+server:
+  port: 10010                    # KRONO_SERVER_PORT
+
+redis:
+  addr: "127.0.0.1:6379"         # KRONO_REDIS_ADDR
+  password: ""                   # KRONO_REDIS_PASSWORD（留空=无密码；示例为空，生产用环境变量覆盖）
+  db: 15                         # KRONO_REDIS_DB
+
+postgres:
+  host: "127.0.0.1"              # KRONO_POSTGRES_HOST
+  port: 5432                     # KRONO_POSTGRES_PORT
+  user: "krono"                  # KRONO_POSTGRES_USER
+  password: "password"           # KRONO_POSTGRES_PASSWORD（示例值；生产请用环境变量覆盖，不入库）
+  dbname: "krono_job"            # KRONO_POSTGRES_DBNAME
+  schema: "public"               # KRONO_POSTGRES_SCHEMA
+  sslmode: "disable"             # KRONO_POSTGRES_SSLMODE
+  max_conns: 10                  # KRONO_POSTGRES_MAX_CONNS
+
+jwt:
+  secret: "change-me-in-prod"    # KRONO_JWT_SECRET（示例值；生产必须用环境变量覆盖，勿提交真实密钥）
+  expire_hours: 24               # KRONO_JWT_EXPIRE_HOURS
+
+bootstrap:
+  admin_user: "admin"            # KRONO_BOOTSTRAP_ADMIN_USER
+  admin_pass: "123456"           # KRONO_BOOTSTRAP_ADMIN_PASS（示例值；生产请用环境变量覆盖）
+
+jobs:
+  path: "configs/jobs.yaml"      # KRONO_JOBS_PATH

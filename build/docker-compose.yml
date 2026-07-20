@@ -1,0 +1,55 @@
+# krono-job 一体化部署
+# 主服务 krono 为「单镜像」：前端 + Go 后端 + PostgreSQL 16 + Redis 7 全部内置，
+# 可直接 `docker run` 独立运行（见 README.md）。本 compose 在其基础上额外挂一个
+# asynqmon 用于可视化队列/RRedis 监控，服务名互联（asynqmon -> krono:6379）。
+#
+# 构建镜像（国内网络示例，使用镜像加速源）：
+#   docker build -t krono-job:latest \
+#     --build-arg BASE_REGISTRY=docker.m.daocloud.io \
+#     -f build/Dockerfile .
+#
+# 启动：
+#   docker compose -f build/docker-compose.yml up -d
+#
+# 访问：
+#   平台 Web / API : http://localhost:10010
+#   asynqmon 面板  : http://localhost:8080
+#   PostgreSQL     : localhost:5432  (用户 krono / 密码见环境变量, 库 krono_job)
+#   Redis          : localhost:6379
+
+services:
+  krono:
+    image: krono-job:latest
+    container_name: krono-job
+    restart: unless-stopped
+    ports:
+      - "10010:10010"   # Web + API
+      - "5432:5432"     # PostgreSQL（按需对外暴露）
+      - "6379:6379"     # Redis（按需对外暴露，asynqmon 通过服务名 krono:6379 访问）
+    environment:
+      # 以下均为可选项，缺省使用镜像内置默认值；生产环境务必覆盖敏感项
+      KRONO_JWT_SECRET: "${KRONO_JWT_SECRET:-change-me-in-prod}"
+      KRONO_BOOTSTRAP_ADMIN_USER: "${KRONO_BOOTSTRAP_ADMIN_USER:-admin}"
+      KRONO_BOOTSTRAP_ADMIN_PASS: "${KRONO_BOOTSTRAP_ADMIN_PASS:-admin123}"
+      KRONO_POSTGRES_PASSWORD: "${KRONO_POSTGRES_PASSWORD:-kronopass}"
+      KRONO_POSTGRES_USER: "${KRONO_POSTGRES_USER:-krono}"
+      KRONO_POSTGRES_DBNAME: "${KRONO_POSTGRES_DBNAME:-krono_job}"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:10010/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  asynqmon:
+    # 若 Docker Hub 不可达，可改用镜像站，例如：
+    #   image: docker.m.daocloud.io/hibiken/asynqmon:latest
+    image: hibiken/asynqmon:latest
+    container_name: krono-asynqmon
+    restart: unless-stopped
+    command: ["--redis-url=redis://krono:6379", "--addr=0.0.0.0:8080"]
+    ports:
+      - "8080:8080"
+    depends_on:
+      krono:
+        condition: service_healthy
