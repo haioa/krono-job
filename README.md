@@ -6,6 +6,22 @@
 
 ---
 
+## 0. 效果展示
+
+管理后台基于 Vue3（经 `go:embed` 打包进二进制），默认访问 `http://localhost:10010`。
+
+| 页面 | 截图 |
+| --- | --- |
+| 登录页 | ![登录页](docs/images/login.png) |
+| 仪表盘（统计概览） | ![仪表盘](docs/images/dashbord.png) |
+| 任务管理 | ![任务列表](docs/images/job.png) |
+| 执行日志 | ![执行日志](docs/images/log.png) |
+| 用户管理 | ![用户管理](docs/images/user.png) |
+
+各页面的功能说明详见 [`docs/images/README.md`](docs/images/README.md)。
+
+---
+
 ## 1. 镜像构建
 
 构建为多阶段镜像：`node` 构建前端 → `golang` 用 vendored 依赖离线构建二进制 → `ubuntu` 内置 PostgreSQL 16 + Redis 7。
