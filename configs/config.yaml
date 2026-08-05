@@ -52,4 +52,7 @@ cluster:
   health_key: "krono:node_health"                  # KRONO_CLUSTER_HEALTH_KEY（下游存活探测结果共享 Redis key）
   probe_timeout: "2s"                              # KRONO_CLUSTER_PROBE_TIMEOUT（下游存活探测超时）
   default_lb: "round_robin"                        # KRONO_CLUSTER_DEFAULT_LB（round_robin|least_conn|random|consistent）
+  skip_verify_tls: false                           # KRONO_CLUSTER_SKIP_VERIFY_TLS
+                                                    # true=对 HTTPS 下游跳过证书校验（内网自签/证书 IP 不匹配时直接访问）；
+                                                    # false=保持默认安全校验，证书不信任将调用失败（默认）。
 
