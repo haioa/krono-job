@@ -20,6 +20,7 @@ const router = createRouter({
         { path: 'jobs', name: 'jobs', component: () => import('@/views/JobsView.vue') },
         { path: 'logs', name: 'logs', component: () => import('@/views/LogsView.vue') },
         { path: 'logs/:id', name: 'log-detail', component: () => import('@/views/LogDetailView.vue') },
+        { path: 'nodes', name: 'nodes', component: () => import('@/views/NodesView.vue') },
         { path: 'users', name: 'users', component: () => import('@/views/UsersView.vue') },
       ],
     },

@@ -14,7 +14,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/hibiken/asynq"
 	_ "github.com/joho/godotenv/autoload"
+	"go.uber.org/zap"
 
+	"github.com/haioa/krono-job/internal/cluster"
 	"github.com/haioa/krono-job/internal/config"
 	"github.com/haioa/krono-job/internal/handler"
 	"github.com/haioa/krono-job/internal/middleware"
@@ -68,10 +70,71 @@ func main() {
 		log.Warnw("bootstrap admin 未完成（可稍后手动创建或检查 PG 连接）", "err", err)
 	}
 
-	// 调度内核（M3）：加载 jobs.yaml 并注册 Asynq Scheduler，附带 fsnotify 热重载。
+	// ===== 分布式集群装配 =====
+	// health 为调用方主动探测的下游存活缓存（下游不注册/不写 Redis，零侵入）。
+	// 为 nil 时 Worker 退化为单 endpoint 调用（无存活过滤、无 LB）。
+	var health *cluster.NodeHealth
+	var leader *cluster.Leader
+	var nodeID string
+
+	// 调度内核提前声明，供 Leader 选举回调在成为主节点时按需启动。
 	sched := scheduler.New(repo.Redis, cfg.Jobs.Path, log)
-	if err := sched.Start(); err != nil {
-		log.Warnw("调度内核启动异常（热重载监听未建立），已忽略", "err", err)
+
+	if cfg.Cluster.Distributed() {
+		nodeID = cfg.Cluster.NodeID
+		if nodeID == "" {
+			nodeID = defaultNodeID()
+		}
+		// 下游存活完全由调用方主动探测（TCP/HEAD/gRPC-health），结果写入 Redis 集中共享，
+		// 供前端看板与各实例统一读取；不依赖下游注册心跳。
+		// 探测结果在 Redis 的 TTL 取探测间隔的 1.5 倍，超过未刷新即视为节点失联。
+		const probeInterval = 10 * time.Second
+		healthTTL := probeInterval * 3 / 2
+		health = cluster.NewNodeHealth(cfg.Cluster.ProbeTimeout, repo.Redis, cfg.Cluster.HealthKey, healthTTL)
+
+		// Leader 选举：只有抢到选主锁的节点才运行 Asynq Scheduler（触发 krono:dispatch），
+		// 其余节点作为纯 Worker 消费任务，避免多实例重复触发同一任务。
+		leader = cluster.NewLeader(repo.Redis, cfg.Cluster.LeaderKey, nodeID,
+			cluster.WithLeaderTTL(cfg.Cluster.LeaderTTL),
+			cluster.WithLeaderRefresh(cfg.Cluster.LeaderTTL/3),
+			cluster.WithLeaderChangeHook(func(isLeader bool) {
+				if isLeader {
+					if sched.IsRunning() {
+						return
+					}
+					log.Infow("本节点成为 Leader，启动调度内核", "node_id", nodeID)
+					if err := sched.Start(); err != nil {
+						log.Warnw("调度内核启动异常", "err", err)
+					}
+				} else {
+					if !sched.IsRunning() {
+						return
+					}
+					log.Infow("本节点退位为 Follower，停止调度内核（仅消费任务）", "node_id", nodeID)
+					sched.Shutdown()
+				}
+			}),
+		)
+		go leader.Run(context.Background())
+		defer leader.Stop()
+
+		// 后台周期探测：遍历所有任务的下游 endpoints，持续探活并写 Redis，
+		// 保证前端看板随时能看到被调用方节点存活状态（即使当前没有任务在分发）。
+		// 每个分布式实例都参与探测，结果以 endpoint 为粒度共享到同一 Redis key。
+		probeCtx, probeCancel := context.WithCancel(context.Background())
+		go runHealthProbe(probeCtx, sched, health, nodeID, probeInterval, log)
+		defer probeCancel()
+
+		log.Infow("分布式模式已启用，开始参与选主（调用方探测下游存活，下游无需注册）",
+			"node_id", nodeID, "probe_timeout", cfg.Cluster.ProbeTimeout, "probe_interval", probeInterval)
+	}
+
+	// 调度内核（M3）：加载 jobs.yaml 并注册 Asynq Scheduler，附带 fsnotify 热重载。
+	// 非分布式模式：直接启动；分布式模式：交由 Leader 回调按需启动/停止。
+	if !cfg.Cluster.Distributed() {
+		if err := sched.Start(); err != nil {
+			log.Warnw("调度内核启动异常（热重载监听未建立），已忽略", "err", err)
+		}
 	}
 	defer sched.Shutdown()
 
@@ -81,7 +144,7 @@ func main() {
 		Password: cfg.Redis.Password,
 		DB:       cfg.Redis.DB,
 	}
-	wkr := worker.New(redisOpt, repo, log)
+	wkr := worker.New(redisOpt, repo, log, health, nodeID)
 	wkr.Start()
 	defer wkr.Shutdown()
 
@@ -112,6 +175,7 @@ func main() {
 		jobsH := handler.NewJobsHandler(repo, cfg.Jobs.Path, asynqClient, log)
 		statsH := handler.NewStatsHandler(repo, cfg.Jobs.Path)
 		usersH := handler.NewUsersHandler(repo)
+		clusterH := handler.NewClusterHandler(health, leader, nodeID, cfg.Cluster.Distributed())
 
 		protected.GET("/logs", logsH.List)
 		protected.GET("/logs/task-types", logsH.TaskTypes)
@@ -132,6 +196,10 @@ func main() {
 		protected.GET("/stats/overview", statsH.Overview)
 		protected.GET("/stats/daily", statsH.Daily)
 		protected.GET("/stats/ranking", statsH.Ranking)
+
+		// 分布式集群：查看下游节点存活与选主状态（非分布式模式下返回 disabled）。
+		protected.GET("/cluster/nodes", clusterH.Nodes)
+		protected.GET("/cluster/status", clusterH.Status)
 	}
 
 	// SPA 静态资源（生产：web/dist 经 go:embed 打包进二进制）。
@@ -211,5 +279,51 @@ func detectContentType(name string) string {
 		return "font/woff2"
 	default:
 		return "application/octet-stream"
+	}
+}
+
+// defaultNodeID 生成节点唯一标识：优先 hostname，拼上进程 PID，确保同机多实例不冲突。
+func defaultNodeID() string {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		host = "unknown"
+	}
+	return fmt.Sprintf("%s-%d", host, os.Getpid())
+}
+
+// runHealthProbe 是后台周期探测器：遍历所有任务的下游 endpoints，按协议主动探活，
+// 结果写入 Redis（由 cluster.NodeHealth 完成），供前端看板与各实例统一读取。
+// 即使当前没有任何任务在分发，也能持续刷新被调用方节点的存活状态。
+func runHealthProbe(ctx context.Context, sched *scheduler.Scheduler, health *cluster.NodeHealth, nodeID string, interval time.Duration, log *zap.SugaredLogger) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	// 启动即先探一轮。
+	probeOnce(ctx, sched, health, nodeID, log)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			probeOnce(ctx, sched, health, nodeID, log)
+		}
+	}
+}
+
+// probeOnce 对当前所有任务的全部下游 endpoints 做一次探测（按 endpoint 去重）。
+func probeOnce(ctx context.Context, sched *scheduler.Scheduler, health *cluster.NodeHealth, nodeID string, log *zap.SugaredLogger) {
+	type key struct{ ep, proto string }
+	seen := make(map[key]struct{})
+	for _, job := range sched.AllJobs() {
+		// 仅对启用的、配置了多/单 endpoint 的任务探测。
+		for _, ep := range job.TargetEndpoints() {
+			k := key{ep, job.Protocol}
+			if _, ok := seen[k]; ok {
+				continue
+			}
+			seen[k] = struct{}{}
+			alive, reason := health.Check(ctx, ep, job.Protocol, nodeID)
+			log.Debugw("health probe", "endpoint", ep, "protocol", job.Protocol,
+				"alive", alive, "by", nodeID, "reason", reason)
+		}
 	}
 }

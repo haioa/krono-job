@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/viper"
 )
@@ -16,11 +17,31 @@ type Config struct {
 	JWT       JWTConfig
 	Bootstrap BootstrapConfig
 	Jobs      JobsConfig
+	Cluster   ClusterConfig // 分布式运行配置（Leader 选举 + 节点心跳注册）
 }
 
 // JobsConfig 是 jobs.yaml（调度内核输入，PLAN §五）的加载配置。
 type JobsConfig struct {
 	Path string `mapstructure:"path"` // jobs.yaml 路径，默认 configs/jobs.yaml
+}
+
+// ClusterConfig 控制调度器以分布式方式运行：
+//   - 通过 Redis 选主（Leader Election）保证多实例下只有一个节点触发调度，避免重复 dispatch；
+//   - 通过调用方主动探测感知下游被调用方（执行节点）存活，配合负载均衡实现多节点分发。
+//     下游节点【不】注册心跳（避免臃肿服务适配注册协议），存活完全由 krono-job 主动探测判定。
+type ClusterConfig struct {
+	Enabled      bool          `mapstructure:"enabled"`       // 是否启用分布式模式（false 时单节点退化运行）
+	NodeID       string        `mapstructure:"node_id"`       // 本调度节点唯一标识（缺省自动取 hostname+pid）
+	LeaderKey    string        `mapstructure:"leader_key"`    // 选主锁 Redis key，默认 krono:leader
+	LeaderTTL    time.Duration `mapstructure:"leader_ttl"`    // 选主锁 TTL，默认 10s
+	HealthKey    string        `mapstructure:"health_key"`    // 下游存活探测结果 Redis hash key，默认 krono:node_health
+	ProbeTimeout time.Duration `mapstructure:"probe_timeout"` // 下游存活探测超时，默认 2s
+	DefaultLB    string        `mapstructure:"default_lb"`    // 任务未显式指定 lb_strategy 时使用的默认策略，默认 round_robin
+}
+
+// Distributed 便捷判断：是否启用分布式模式。
+func (c ClusterConfig) Distributed() bool {
+	return c.Enabled
 }
 
 type ServerConfig struct {
@@ -93,6 +114,23 @@ func Load(path string) (*Config, error) {
 	// jobs.yaml 路径默认值（环境变量优先于默认值）。
 	if c.Jobs.Path == "" {
 		c.Jobs.Path = "configs/jobs.yaml"
+	}
+
+	// 集群配置默认值。
+	if c.Cluster.LeaderKey == "" {
+		c.Cluster.LeaderKey = "krono:leader"
+	}
+	if c.Cluster.HealthKey == "" {
+		c.Cluster.HealthKey = "krono:node_health"
+	}
+	if c.Cluster.LeaderTTL <= 0 {
+		c.Cluster.LeaderTTL = 10 * time.Second
+	}
+	if c.Cluster.ProbeTimeout <= 0 {
+		c.Cluster.ProbeTimeout = 2 * time.Second
+	}
+	if c.Cluster.DefaultLB == "" {
+		c.Cluster.DefaultLB = "round_robin"
 	}
 
 	return &c, nil

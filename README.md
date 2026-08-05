@@ -293,3 +293,75 @@ go build -mod=vendor -ldflags="-s -w" -o bin/krono-job.exe ./cmd/server
 - 迁移报 `permission denied to create extension "uuid-ossp"`：未以 superuser 执行 `build/init-db.sql`，见 7.2。
 - 连接 PG / Redis 失败：确认本机服务已启动，且地址 / 密码与 `.env` 或 `config.yaml` 一致（本地默认见 7.3）。
 - 找不到 `configs/jobs.yaml`：在运行目录下确认 `configs/` 存在，或用 `-f` 指定配置路径（`KRONO_JOBS_PATH` 也可经环境变量覆盖）。
+
+---
+
+## 9. 分布式部署（多节点调度 + 下游负载均衡）
+
+v2 起支持真正的分布式运行：多个 `krono-job` 实例共享同一 Redis 与 PostgreSQL，
+既避免「多实例重复触发任务」，又能向**多个下游被调用方节点**分发并做负载均衡与故障剔除。
+
+### 9.1 三大能力
+
+| 能力 | 实现 | 说明 |
+| --- | --- | --- |
+| 调度高可用（去重） | Redis 选主（Leader Election） | 多实例竞争同一把 Redis 锁，仅 **Leader** 运行 Asynq Scheduler 触发 `krono:dispatch`；其余实例作为纯 Worker 消费。Leader 宕机后锁过期，其它节点自动接任（failover）。 |
+| 下游存活判定（探活） | 调用方主动探测（Probe） | **下游节点不注册、不写 Redis**（避免臃肿服务适配注册协议）。存活完全由 krono-job 主动探测决定：分发前对候选 endpoint 做轻量探测（gRPC=标准 Health 协议回退 TCP，HTTP=HEAD /healthz 或 TCP dial），失败即剔除；探测结果按 TTL 缓存在内存，供选目标与观测。 |
+| 负载均衡 | `internal/loadbalance` | 从「配置且存活」的节点中按策略选目标：`round_robin`（默认）/ `least_conn` / `random` / `consistent`（一致哈希，同 `task_type` 稳定命中同节点）。 |
+
+### 9.2 启用方式
+
+在 `configs/config.yaml` 开启 `cluster.enabled: true`（或环境变量 `KRONO_CLUSTER_ENABLED=true`），
+并部署 ≥2 个 `krono-job` 实例（指向同一 Redis/PG）。每个任务在 `jobs.yaml` 用 `endpoints`（数组）代替单个 `endpoint`：
+
+```yaml
+- name: 分布式-门禁token刷新
+  task_type: sdc_refresh_user_token_dist
+  cron: "0,30 * * * *"
+  protocol: grpc
+  endpoints:                      # 多节点；优先级高于 endpoint
+    - "192.168.31.45:20001"
+    - "192.168.31.46:20001"
+    - "192.168.31.47:20001"
+  lb_strategy: "round_robin"      # round_robin | least_conn | random | consistent
+  grpc_service: "sdc.Invoke"
+  grpc_method: "RefreshUserToken"
+  request_type: "sdc.RefreshUserTokenReq"
+  payload: { uid: "", refresh_token: "" }
+```
+
+- 仅配一个 `endpoint` / `endpoints` 单元素时，自动退化为单节点直连；`cluster.enabled=false` 时整体退化为旧版单节点行为（完全向后兼容）。
+- 下游服务零侵入：无需注册心跳、无需改造，krono-job 自行探测其存活并按策略分发。
+
+### 9.2.1 gRPC 下游的探测（不只是 HTTP）
+
+探测**同时支持 HTTP 与 gRPC**，且 gRPC 走的是真正的 RPC 级探测，而非仅端口连通：
+
+1. **标准 gRPC Health Protocol**：调用 `grpc.health.v1.Health/Check`，返回 `SERVING` 即存活。
+   这是业界标准，下游只需挂上官方健康服务即可，**业务零改动**：
+   ```go
+   import "google.golang.org/grpc/health"
+   import "google.golang.org/grpc/health/grpc_health_v1"
+
+   healthServer := health.NewServer()
+   healthServer.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
+   grpc_health_v1.RegisterHealthServer(grpcServer, healthServer)
+   ```
+2. **兼容回退**：若下游未实现 health 服务（返回 `Unimplemented`），自动退回 **TCP 连通判定**（端口可达即视为存活），保证旧 gRPC 服务仍可被探活。
+3. 业务 RPC 接口本身无需探活——标准 health 已能反映进程是否处理了 RPC；若要更严格（验证某业务 method 真的可用），可在下游自行把该 method 的就绪状态写入 health 的 `ServingStatus`。
+
+> 探测使用与下游调用一致的 insecure 明文连接；如需 mTLS，在 `internal/cluster/grpc_health.go` 的 `grpc.NewClient` 处扩展 `credentials` 即可（与 `pkg/grpcpool` 同步）。
+
+### 9.3 运维观测
+
+- `GET /api/cluster/status`：返回本节点角色（`leader` / `follower` / `standalone`）。
+- `GET /api/cluster/nodes`：返回调用方探测得到的下游节点健康视图（endpoint / alive / error / checked），仅 `enabled=true` 有数据。
+- 调度日志会打印每个 dispatch 命中的 `endpoint`、`endpoints`、`distributed` 与选主状态，便于排查。
+
+### 9.4 关键源码位置
+
+- `internal/cluster/leader.go`：Redis 选主（Lua 保证续租原子性）。
+- `internal/cluster/probe.go` + `registry.go`（`NodeHealth`）：调用方主动探测与探测结果内存缓存（下游不写 Redis）。
+- `internal/loadbalance/loadbalance.go`：负载均衡策略。
+- `internal/worker/worker.go` 的 `selectEndpoint`：分发前「探测过滤 + 负载均衡」选目标。
+- `internal/scheduler/jobdef.go`：`JobDef.Endpoints` / `LBStrategy` 配置与解析。

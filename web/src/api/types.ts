@@ -165,3 +165,28 @@ export interface UpdateUserRequest {
   password?: string
 }
 
+// ---------- 分布式集群：被调用方节点存活状态 ----------
+// 单个下游被调用方节点的健康视图（探测结果来自 Redis 集中共享）。
+export interface ClusterNode {
+  endpoint: string
+  protocol: string
+  alive: boolean
+  error?: string
+  checked: number // 最近探测时间 UnixNano
+  by?: string // 探测来源节点 ID
+}
+
+// GET /api/cluster/nodes 返回。
+export interface ClusterNodesResponse {
+  distributed: boolean
+  nodes: ClusterNode[]
+}
+
+// GET /api/cluster/status 返回。
+export interface ClusterStatusResponse {
+  distributed: boolean
+  node_id: string
+  role: 'leader' | 'follower' | 'standalone'
+  is_leader: boolean
+}
+

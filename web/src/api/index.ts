@@ -1,5 +1,5 @@
 import { apiFetch } from './http'
-import type { LoginRequest, LoginResponse, ChangePasswordRequest, JobsResponse, PageResult, LogsQuery, TaskTypeList, JobExecLog, StatsOverview, DailyStatList, TaskRankList, StatsQuery, DeleteLogsResponse, UserListResponse, UserView, CreateUserRequest, UpdateUserRequest } from './types'
+import type { LoginRequest, LoginResponse, ChangePasswordRequest, JobsResponse, PageResult, LogsQuery, TaskTypeList, JobExecLog, StatsOverview, DailyStatList, TaskRankList, StatsQuery, DeleteLogsResponse, UserListResponse, UserView, CreateUserRequest, UpdateUserRequest, ClusterNodesResponse, ClusterStatusResponse } from './types'
 
 // 认证
 export function login(req: LoginRequest): Promise<LoginResponse> {
@@ -102,4 +102,12 @@ export function updateUser(id: string, req: UpdateUserRequest): Promise<UserView
 // 删除用户。
 export function deleteUser(id: string): Promise<{ deleted: number; message: string }> {
   return apiFetch(`/users/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+// 分布式集群：被调用方节点存活状态
+export function getClusterNodes(): Promise<ClusterNodesResponse> {
+  return apiFetch('/cluster/nodes')
+}
+export function getClusterStatus(): Promise<ClusterStatusResponse> {
+  return apiFetch('/cluster/status')
 }

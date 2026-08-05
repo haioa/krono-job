@@ -14,6 +14,7 @@ const title = computed(() => {
   if (route.name === 'stats') return '统计看板'
   if (route.name === 'jobs') return '任务管理'
   if (route.name === 'logs') return '执行日志'
+  if (route.name === 'nodes') return '节点状态'
   if (route.name === 'users') return '用户管理'
   return '控制台'
 })
@@ -21,6 +22,7 @@ const subtitle = computed(() => {
   if (route.name === 'stats') return '执行结果概览、每日趋势与任务调用排行'
   if (route.name === 'jobs') return '查看调度任务，实时暂停或恢复执行'
   if (route.name === 'logs') return '检索任务执行记录与结果'
+  if (route.name === 'nodes') return '查看被调用方节点存活状态（调用方主动探测，无需下游改造）'
   if (route.name === 'users') return '管理系统管理员账号'
   return ''
 })
@@ -150,6 +152,15 @@ async function submitPwd() {
             <path d="M8 11h8M8 15h8M8 19h5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
           </svg>
           <span>执行日志</span>
+        </router-link>
+        <router-link to="/nodes" class="nav-item">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <rect x="3" y="4" width="18" height="6" rx="1.5" fill="none" stroke="currentColor" stroke-width="2" />
+            <rect x="3" y="14" width="18" height="6" rx="1.5" fill="none" stroke="currentColor" stroke-width="2" />
+            <circle cx="7" cy="7" r="1" fill="currentColor" />
+            <circle cx="7" cy="17" r="1" fill="currentColor" />
+          </svg>
+          <span>节点状态</span>
         </router-link>
         <router-link to="/users" class="nav-item">
           <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">

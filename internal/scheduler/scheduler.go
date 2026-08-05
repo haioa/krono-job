@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -29,10 +30,13 @@ type Scheduler struct {
 
 	mu      sync.Mutex
 	entries map[string]string // task_type -> Asynq entryID
+	jobs    []JobDef          // 当前加载的全部任务定义（供健康探测遍历 endpoints）
 
-	watcher   *fsnotify.Watcher
+	watcher    *fsnotify.Watcher
 	shutdownCh chan struct{}
 	doneCh     chan struct{}
+
+	running int32 // 原子标志：1=正在运行，0=已停止（防止重复 Start/Shutdown）
 }
 
 // New 构造一个调度器。redisClient 与仓库共用同一连接池（asynq Shutdown 对共享连接为 no-op）。
@@ -50,6 +54,13 @@ func New(redisClient *redis.Client, jobsPath string, log *zap.SugaredLogger) *Sc
 // Start 加载 jobs.yaml、注册任务、启动 Asynq Scheduler 与文件热重载监听。
 // 非阻塞：Asynq 在后台 goroutine 调度，热重载在独立 goroutine 中循环。
 func (s *Scheduler) Start() error {
+	if !atomic.CompareAndSwapInt32(&s.running, 0, 1) {
+		// 已在运行，幂等返回。
+		return nil
+	}
+	// 重新初始化关停/完成通道（上一次 Shutdown 已关闭它们）。
+	s.shutdownCh = make(chan struct{})
+	s.doneCh = make(chan struct{})
 	s.asynq = asynq.NewSchedulerFromRedisClient(s.redis, &asynq.SchedulerOpts{
 		// 使用本地时区，使 cron 表达更直观；默认 UTC。
 		Location: time.Local,
@@ -87,6 +98,11 @@ func (s *Scheduler) reload() error {
 	if err != nil {
 		return err
 	}
+
+	s.mu.Lock()
+	// 保存解析后的全部任务定义，供健康探测后台遍历 endpoints。
+	s.jobs = defs
+	s.mu.Unlock()
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -198,6 +214,10 @@ func (s *Scheduler) watchLoop() {
 
 // Shutdown 停止热重载监听并优雅关停 Asynq Scheduler。
 func (s *Scheduler) Shutdown() {
+	if !atomic.CompareAndSwapInt32(&s.running, 1, 0) {
+		// 已停止，幂等返回，避免重复 close(shutdownCh) 引发 panic。
+		return
+	}
 	if s.watcher != nil {
 		_ = s.watcher.Close()
 		s.watcher = nil
@@ -207,4 +227,19 @@ func (s *Scheduler) Shutdown() {
 		s.asynq.Shutdown()
 	}
 	<-s.doneCh
+}
+
+// IsRunning 返回调度内核是否在运行（供 Leader 选举回调判断，避免重复启停）。
+func (s *Scheduler) IsRunning() bool {
+	return atomic.LoadInt32(&s.running) == 1
+}
+
+// AllJobs 返回当前加载的全部任务定义（经 ${ENV} 解析前的原始定义，endpoints 已在文件内）。
+// 供健康探测后台遍历所有任务的下游 endpoints，保证即便当前无分发也能持续探活写 Redis。
+func (s *Scheduler) AllJobs() []JobDef {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]JobDef, len(s.jobs))
+	copy(out, s.jobs)
+	return out
 }

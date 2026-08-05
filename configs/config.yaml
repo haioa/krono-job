@@ -37,3 +37,19 @@ bootstrap:
 
 jobs:
   path: "configs/jobs.yaml"      # KRONO_JOBS_PATH
+
+# 分布式集群配置（v2：多节点调度 + 调用方探测 + 负载均衡）。
+# enabled=false 时退化为单节点模式（与旧版行为一致）。
+# enabled=true 时：
+#   - 多个 krono-job 实例通过 Redis 选主，仅 Leader 触发调度，避免重复 dispatch；
+#   - 下游被调用方【不】注册心跳；存活由调用方主动探测（TCP/HEAD）判定，
+#     Worker 只在存活节点间按 lb_strategy 选目标分发（下游服务零侵入）。
+cluster:
+  enabled: false                                   # KRONO_CLUSTER_ENABLED（true/false）
+  node_id: ""                                      # KRONO_CLUSTER_NODE_ID（留空=hostname-pid 自动生成）
+  leader_key: "krono:leader"                       # KRONO_CLUSTER_LEADER_KEY
+  leader_ttl: "10s"                                # KRONO_CLUSTER_LEADER_TTL（选主锁持有时间）
+  health_key: "krono:node_health"                  # KRONO_CLUSTER_HEALTH_KEY（下游存活探测结果共享 Redis key）
+  probe_timeout: "2s"                              # KRONO_CLUSTER_PROBE_TIMEOUT（下游存活探测超时）
+  default_lb: "round_robin"                        # KRONO_CLUSTER_DEFAULT_LB（round_robin|least_conn|random|consistent）
+

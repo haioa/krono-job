@@ -18,22 +18,24 @@ const DefaultTimeout = 30 * time.Second
 // JobDef 对应 jobs.yaml 中 jobs 数组的单条声明式任务定义。
 // yaml 标签用于解析配置文件；json 标签用于把定义作为 Asynq 任务载荷透传给 Worker（M4）。
 type JobDef struct {
-	Name        string                 `yaml:"name" json:"name"`
-	TaskType    string                 `yaml:"task_type" json:"task_type"`
-	Cron        string                 `yaml:"cron" json:"cron"`
-	Protocol    string                 `yaml:"protocol" json:"protocol"`
-	TriggerType string                 `yaml:"-" json:"trigger_type"` // 运行期注入：manual=手动触发；空=hron（默认）
-	Enabled     *bool                  `yaml:"enabled" json:"enabled"`
-	Timeout     string                 `yaml:"timeout" json:"timeout"`
-	Retry       int                    `yaml:"retry" json:"retry"`
-	Endpoint    string                 `yaml:"endpoint" json:"endpoint"`
-	Method      string                 `yaml:"method" json:"method"`
-	Headers     map[string]string      `yaml:"headers" json:"headers"`
-	Payload     map[string]any `yaml:"payload" json:"payload"`
-	GRPCService string                 `yaml:"grpc_service" json:"grpc_service"`
-	GRPCMethod  string                 `yaml:"grpc_method" json:"grpc_method"`
-	RequestType string                 `yaml:"request_type" json:"request_type"`
-	Metadata    map[string]string      `yaml:"metadata" json:"metadata"`
+	Name        string            `yaml:"name" json:"name"`
+	TaskType    string            `yaml:"task_type" json:"task_type"`
+	Cron        string            `yaml:"cron" json:"cron"`
+	Protocol    string            `yaml:"protocol" json:"protocol"`
+	TriggerType string            `yaml:"-" json:"trigger_type"` // 运行期注入：manual=手动触发；空=hron（默认）
+	Enabled     *bool             `yaml:"enabled" json:"enabled"`
+	Timeout     string            `yaml:"timeout" json:"timeout"`
+	Retry       int               `yaml:"retry" json:"retry"`
+	Endpoint    string            `yaml:"endpoint" json:"endpoint"`
+	Endpoints   []string          `yaml:"endpoints" json:"endpoints"`     // 分布式多节点；优先级高于 Endpoint
+	LBStrategy  string            `yaml:"lb_strategy" json:"lb_strategy"` // 负载均衡策略（多 endpoint 时生效）
+	Method      string            `yaml:"method" json:"method"`
+	Headers     map[string]string `yaml:"headers" json:"headers"`
+	Payload     map[string]any    `yaml:"payload" json:"payload"`
+	GRPCService string            `yaml:"grpc_service" json:"grpc_service"`
+	GRPCMethod  string            `yaml:"grpc_method" json:"grpc_method"`
+	RequestType string            `yaml:"request_type" json:"request_type"`
+	Metadata    map[string]string `yaml:"metadata" json:"metadata"`
 }
 
 // IsEnabled 返回该任务是否纳入调度：enabled 缺省视为 true（决策 §5）。
@@ -56,9 +58,42 @@ func (j JobDef) TimeoutDuration() time.Duration {
 // ResolveEnv 返回一份副本，把所有字符串字段中的 ${VAR} 替换为当前环境变量。
 // headers / metadata / endpoint 明确支持 ${ENV}（决策 §5）；payload 内的 ${var}
 // 为可选运行期模板，MVP 阶段按静态环境变量一并替换。
+// TargetEndpoints 返回该任务配置的所有下游地址（endpoints 优先，否则回退到单 endpoint）。
+// 调用方（Worker）应结合 cluster.NodeHealth 的主动探测结果做存活过滤，再交给 loadbalance 选择。
+func (j JobDef) TargetEndpoints() []string {
+	if len(j.Endpoints) > 0 {
+		out := make([]string, 0, len(j.Endpoints))
+		for _, e := range j.Endpoints {
+			e = expandEnv(e)
+			if e != "" {
+				out = append(out, e)
+			}
+		}
+		return out
+	}
+	if e := expandEnv(j.Endpoint); e != "" {
+		return []string{e}
+	}
+	return nil
+}
+
+// IsDistributed 表示该任务是否配置了多个下游节点（可走负载均衡）。
+func (j JobDef) IsDistributed() bool {
+	return len(j.TargetEndpoints()) > 1
+}
+
 func (j JobDef) ResolveEnv() JobDef {
 	r := j
 	r.Endpoint = expandEnv(r.Endpoint)
+	if len(r.Endpoints) > 0 {
+		eps := make([]string, 0, len(r.Endpoints))
+		for _, e := range r.Endpoints {
+			if e = expandEnv(e); e != "" {
+				eps = append(eps, e)
+			}
+		}
+		r.Endpoints = eps
+	}
 	r.Method = expandEnv(r.Method)
 	r.GRPCService = expandEnv(r.GRPCService)
 	r.GRPCMethod = expandEnv(r.GRPCMethod)
@@ -157,8 +192,8 @@ func validateJob(def JobDef) error {
 	if def.Protocol != "http" && def.Protocol != "grpc" {
 		return fmt.Errorf("protocol must be http or grpc, got %q", def.Protocol)
 	}
-	if def.Endpoint == "" {
-		return fmt.Errorf("endpoint is required")
+	if def.Endpoint == "" && len(def.Endpoints) == 0 {
+		return fmt.Errorf("endpoint or endpoints is required")
 	}
 	return nil
 }

@@ -16,6 +16,8 @@ import (
 	"github.com/hibiken/asynq"
 	"go.uber.org/zap"
 
+	"github.com/haioa/krono-job/internal/cluster"
+	"github.com/haioa/krono-job/internal/loadbalance"
 	"github.com/haioa/krono-job/internal/model"
 	"github.com/haioa/krono-job/internal/repository"
 	"github.com/haioa/krono-job/internal/scheduler"
@@ -30,16 +32,19 @@ const workerConcurrency = 10
 
 // Worker 封装 Asynq Server 与 gRPC 连接池。
 type Worker struct {
-	srv  *asynq.Server
-	mux  *asynq.ServeMux
-	repo *repository.Repository
-	log  *zap.SugaredLogger
-	pool *grpcpool.Pool
+	srv    *asynq.Server
+	mux    *asynq.ServeMux
+	repo   *repository.Repository
+	log    *zap.SugaredLogger
+	pool   *grpcpool.Pool
+	health *cluster.NodeHealth // 调用方主动探测的下游存活缓存（心跳由调用方完成，下游无感知）
+	nodeID string              // 本节点标识，写入探测结果供观测
 }
 
 // New 构造 Worker。redisOpt 通常基于 config.Redis 构造为 asynq.RedisClientOpt，
 // 与仓库共用同一 Redis 实例（各自维护连接池）。
-func New(redisOpt asynq.RedisConnOpt, repo *repository.Repository, log *zap.SugaredLogger) *Worker {
+// health 可为 nil：为 nil 时 Worker 不感知节点存活，按配置 endpoints 直接调用（无 LB 过滤）。
+func New(redisOpt asynq.RedisConnOpt, repo *repository.Repository, log *zap.SugaredLogger, health *cluster.NodeHealth, nodeID string) *Worker {
 	srv := asynq.NewServer(redisOpt, asynq.Config{
 		Concurrency: workerConcurrency,
 		Queues:      map[string]int{model.QueueDefault: 1},
@@ -47,14 +52,49 @@ func New(redisOpt asynq.RedisConnOpt, repo *repository.Repository, log *zap.Suga
 		ShutdownTimeout: 30 * time.Second,
 	})
 	w := &Worker{
-		srv:  srv,
-		repo: repo,
-		log:  log,
-		pool: grpcpool.New(),
+		srv:    srv,
+		repo:   repo,
+		log:    log,
+		pool:   grpcpool.New(),
+		health: health,
+		nodeID: nodeID,
 	}
 	w.mux = asynq.NewServeMux()
 	w.mux.HandleFunc(scheduler.DispatchTaskType, w.handle)
 	return w
+}
+
+// selectEndpoint 从任务配置的候选节点中按「存活过滤 + 负载均衡」选出实际调用目标。
+// 存活判定完全由调用方主动探测（cluster.NodeHealth）完成：对候选 endpoint 做探活，
+// 探活失败者剔除，再从存活节点中按 lb_strategy 选择。下游无需注册/上报任何心跳。
+// 非分布式（仅单 endpoint）或 health 为 nil 时直接返回该 endpoint。
+func (w *Worker) selectEndpoint(ctx context.Context, def scheduler.JobDef) (string, error) {
+	candidates := def.TargetEndpoints()
+	if len(candidates) == 0 {
+		return "", fmt.Errorf("no endpoint configured for task %q", def.TaskType)
+	}
+	// 无 health（未启用分布式）或仅单节点：直接返回。
+	if w.health == nil || len(candidates) == 1 {
+		return candidates[0], nil
+	}
+
+	// 调用方主动探测：过滤出存活节点。
+	alive := w.health.FilterLive(ctx, candidates, def.Protocol, w.nodeID)
+	if len(alive) == 0 {
+		w.log.Warnw("probe: no endpoint alive, fallback to all configured (retry downstream)",
+			"task_type", def.TaskType)
+		alive = candidates
+	}
+	return loadbalance.New(loadbalance.Strategy(def.LBStrategy)).Select(toCandidates(alive), def.TaskType)
+}
+
+// toCandidates 把 endpoint 列表转为负载均衡候选（least_conn 场景可在未来从 Registry 拉取 InFlight）。
+func toCandidates(endpoints []string) []loadbalance.Candidate {
+	out := make([]loadbalance.Candidate, 0, len(endpoints))
+	for _, e := range endpoints {
+		out = append(out, loadbalance.Candidate{Endpoint: e})
+	}
+	return out
 }
 
 // Start 非阻塞启动 Worker（在独立 goroutine 中消费队列）。
@@ -87,8 +127,18 @@ func (w *Worker) handle(ctx context.Context, task *asynq.Task) error {
 		"task_type", def.TaskType,
 		"protocol", def.Protocol,
 		"endpoint", def.Endpoint,
+		"endpoints", def.TargetEndpoints(),
+		"distributed", def.IsDistributed(),
 		"trigger_type", def.TriggerType,
 	)
+
+	// 分布式选节点：存活过滤 + 负载均衡，结果写回 def.Endpoint 供后续 HTTP/gRPC 复用。
+	target, err := w.selectEndpoint(ctx, def)
+	if err != nil {
+		w.log.Errorw("select endpoint failed", "task_type", def.TaskType, "err", err)
+		return err
+	}
+	def.Endpoint = target
 
 	rc, _ := asynq.GetRetryCount(ctx)
 	maxR, _ := asynq.GetMaxRetry(ctx)
@@ -110,8 +160,8 @@ func (w *Worker) handle(ctx context.Context, task *asynq.Task) error {
 	}
 
 	var (
-		respBody  string
-		callErr   error
+		respBody string
+		callErr  error
 	)
 
 	switch def.Protocol {
