@@ -18,6 +18,7 @@ type Config struct {
 	Bootstrap BootstrapConfig
 	Jobs      JobsConfig
 	Cluster   ClusterConfig // 分布式运行配置（Leader 选举 + 节点心跳注册）
+	Timezone  string        // cron 表达式所用时区，默认 Asia/Shanghai；支持 IANA 名（如 America/New_York）或 "Local"
 }
 
 // JobsConfig 是 jobs.yaml（调度内核输入，PLAN §五）的加载配置。
@@ -134,7 +135,26 @@ func Load(path string) (*Config, error) {
 		c.Cluster.DefaultLB = "round_robin"
 	}
 
+	// cron 时区：默认 Asia/Shanghai，避免依赖运行环境本地时区导致「日志看着像没执行」。
+	if c.Timezone == "" {
+		c.Timezone = "Asia/Shanghai"
+	}
+	if _, err := time.LoadLocation(c.Timezone); err != nil {
+		// 非法时区名：回落到 Local 并在日志前打告警（调用方通过 TimezoneLocation 拿实际值）。
+		c.Timezone = "Local"
+	}
+
 	return &c, nil
+}
+
+// TimezoneLocation 返回 cron 调度使用的 *time.Location（供 scheduler 使用）。
+// 非法时区名已在 Load 时回落为 Local，这里必然成功。
+func (c *Config) TimezoneLocation() *time.Location {
+	loc, err := time.LoadLocation(c.Timezone)
+	if err != nil {
+		return time.Local
+	}
+	return loc
 }
 
 // applyEnvOverride 当环境变量 key 存在且非空时，用其值覆盖 *dst；否则保持原值（来自 YAML）。

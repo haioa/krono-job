@@ -16,11 +16,15 @@ import (
 type StatsHandler struct {
 	repo     *repository.Repository
 	jobsPath string // jobs.yaml 路径，用于为排行榜的 task_type 补齐可读任务名
+	loc      *time.Location
 }
 
-// NewStatsHandler 构造统计 Handler。
-func NewStatsHandler(repo *repository.Repository, jobsPath string) *StatsHandler {
-	return &StatsHandler{repo: repo, jobsPath: jobsPath}
+// NewStatsHandler 构造统计 Handler。loc 为按天过滤时使用的时区（与调度时区一致）。
+func NewStatsHandler(repo *repository.Repository, jobsPath string, loc *time.Location) *StatsHandler {
+	if loc == nil {
+		loc = time.Local
+	}
+	return &StatsHandler{repo: repo, jobsPath: jobsPath, loc: loc}
 }
 
 // parseRange 从查询参数解析可选时间范围（start/end），格式兼容 RFC3339 与 YYYY-MM-DD。
@@ -28,12 +32,12 @@ func NewStatsHandler(repo *repository.Repository, jobsPath string) *StatsHandler
 func (h *StatsHandler) parseRange(c *gin.Context) *model.StatsFilter {
 	f := &model.StatsFilter{}
 	if s := c.Query("start"); s != "" {
-		if t, err := parseTimeParam(s); err == nil {
+		if t, err := parseTimeParam(s, h.loc); err == nil {
 			f.Start = &t
 		}
 	}
 	if e := c.Query("end"); e != "" {
-		if t, err := parseTimeParam(e); err == nil {
+		if t, err := parseTimeParam(e, h.loc); err == nil {
 			f.End = &t
 		}
 	}

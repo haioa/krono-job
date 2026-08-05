@@ -78,7 +78,7 @@ func main() {
 	var nodeID string
 
 	// 调度内核提前声明，供 Leader 选举回调在成为主节点时按需启动。
-	sched := scheduler.New(repo.Redis, cfg.Jobs.Path, log)
+	sched := scheduler.New(repo.Redis, cfg.Jobs.Path, log, cfg.TimezoneLocation())
 
 	if cfg.Cluster.Distributed() {
 		nodeID = cfg.Cluster.NodeID
@@ -171,9 +171,9 @@ func main() {
 
 		protected.POST("/auth/change-password", authH.ChangePassword)
 
-		logsH := handler.NewLogsHandler(repo, cfg.Jobs.Path)
+		logsH := handler.NewLogsHandler(repo, cfg.Jobs.Path, cfg.TimezoneLocation())
 		jobsH := handler.NewJobsHandler(repo, cfg.Jobs.Path, asynqClient, log)
-		statsH := handler.NewStatsHandler(repo, cfg.Jobs.Path)
+		statsH := handler.NewStatsHandler(repo, cfg.Jobs.Path, cfg.TimezoneLocation())
 		usersH := handler.NewUsersHandler(repo)
 		clusterH := handler.NewClusterHandler(health, leader, nodeID, cfg.Cluster.Distributed())
 

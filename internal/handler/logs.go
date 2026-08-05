@@ -19,11 +19,15 @@ import (
 type LogsHandler struct {
 	repo     *repository.Repository
 	jobsPath string // jobs.yaml 路径，用于补齐"已配置但尚未产生日志"的任务类型
+	loc      *time.Location
 }
 
-// NewLogsHandler 构造日志 Handler。
-func NewLogsHandler(repo *repository.Repository, jobsPath string) *LogsHandler {
-	return &LogsHandler{repo: repo, jobsPath: jobsPath}
+// NewLogsHandler 构造日志 Handler。loc 为按天过滤时使用的时区（与调度时区一致）。
+func NewLogsHandler(repo *repository.Repository, jobsPath string, loc *time.Location) *LogsHandler {
+	if loc == nil {
+		loc = time.Local
+	}
+	return &LogsHandler{repo: repo, jobsPath: jobsPath, loc: loc}
 }
 
 // List 处理 GET /api/logs，支持分页/过滤/排序。
@@ -42,12 +46,12 @@ func (h *LogsHandler) List(c *gin.Context) {
 		q.PageSize = 200
 	}
 	if s := c.Query("start"); s != "" {
-		if t, err := parseTimeParam(s); err == nil {
+		if t, err := parseTimeParam(s, h.loc); err == nil {
 			q.Start = &t
 		}
 	}
 	if e := c.Query("end"); e != "" {
-		if t, err := parseTimeParam(e); err == nil {
+		if t, err := parseTimeParam(e, h.loc); err == nil {
 			q.End = &t
 		}
 	}
@@ -75,15 +79,14 @@ func atoiDefault(s string, def int) int {
 	return n
 }
 
-func parseTimeParam(s string) (time.Time, error) {
+// parseTimeParam 解析时间参数，兼容 RFC3339 与 YYYY-MM-DD。
+// YYYY-MM-DD 视为 loc 时区当天 00:00:00，与调度时区一致，避免按天过滤差一天。
+func parseTimeParam(s string, loc *time.Location) (time.Time, error) {
 	if t, err := time.Parse(time.RFC3339, s); err == nil {
 		return t, nil
 	}
-	// YYYY-MM-DD 视为「本地时区当天 00:00:00」。
-	// 不能按 UTC 解析，否则与数据库以绝对时刻存储的 created_at 相差本地时区偏移（如 UTC+8 差 8 小时），
-	// 且起点会被整体前移，导致按天过滤查不到数据。
 	if t, err := time.Parse("2006-01-02", s); err == nil {
-		return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.Local), nil
+		return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, loc), nil
 	}
 	return time.Time{}, errors.New("invalid time format")
 }

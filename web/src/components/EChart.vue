@@ -1,12 +1,26 @@
 <script setup lang="ts">
 import { ref, shallowRef, onMounted, onBeforeUnmount, watch } from 'vue'
 import { init, use, type ECharts, type EChartsCoreOption } from 'echarts/core'
-import { LineChart, BarChart } from 'echarts/charts'
-import { TooltipComponent, LegendComponent, GridComponent } from 'echarts/components'
+import { LineChart, BarChart, PieChart } from 'echarts/charts'
+import {
+  TooltipComponent,
+  LegendComponent,
+  GridComponent,
+  GraphicComponent,
+} from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 
 // 仅按需注册用到的图表与组件，避免打包整个 echarts。
-use([LineChart, BarChart, TooltipComponent, LegendComponent, GridComponent, CanvasRenderer])
+use([
+  LineChart,
+  BarChart,
+  PieChart,
+  TooltipComponent,
+  LegendComponent,
+  GridComponent,
+  GraphicComponent,
+  CanvasRenderer,
+])
 
 // 通用 ECharts 封装：根据 option 渲染，option 变化时增量更新，容器尺寸变化时自适应。
 const props = withDefaults(

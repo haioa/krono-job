@@ -39,9 +39,15 @@ function clearRange() {
   load()
 }
 
-// 手动修改日期输入框时，取消快捷区间高亮。
+// 手动修改日期输入框时，取消快捷区间高亮，并立即按自定义范围查询。
 function onManualDate() {
   activePreset.value = null
+  load()
+}
+
+// 点击「查询」按钮：按当前自定义日期范围查询（不改快捷区间状态）。
+function onQuery() {
+  load()
 }
 
 function fmtDate(d: Date): string {
@@ -176,6 +182,82 @@ const rankingOption = computed(() => {
 
 // 进入页面默认展示近 30 天，避免无时间范围时拉取全量数据。
 onMounted(() => setLastDays(30))
+
+// ---------- 成功/失败/跳过 饼图 ----------
+const pieOption = computed(() => {
+  const o = overview.value
+  const success = o?.success ?? 0
+  const failed = o?.failed ?? 0
+  const skipped = o?.skipped ?? 0
+  const total = success + failed + skipped
+  const empty = total === 0
+  const pct = (v: number) => (total ? ((v / total) * 100).toFixed(1) + '%' : '0%')
+  return {
+    tooltip: {
+      trigger: 'item',
+      formatter: '{b}: {c} ({d}%)',
+    },
+    legend: {
+      bottom: 8,
+      left: 'center',
+      icon: 'circle',
+      itemWidth: 10,
+      itemHeight: 10,
+      itemGap: 18,
+      data: ['成功', '失败', '跳过'],
+      textStyle: { color: '#5b6173', fontSize: 13 },
+      // 图例显示「名称  数值 (百分比)」，带颜色圆点
+      formatter: (name: string) => {
+        const map: Record<string, number> = { 成功: success, 失败: failed, 跳过: skipped }
+        const v = map[name] ?? 0
+        return `${name}  ${v} (${pct(v)})`
+      },
+    },
+    color: ['#16a34a', '#e11d48', '#8a91a6'],
+    series: [
+      {
+        name: '执行结果',
+        type: 'pie',
+        radius: ['52%', '74%'],
+        center: ['50%', '44%'],
+        avoidLabelOverlap: true,
+        itemStyle: { borderColor: '#fff', borderWidth: 3, borderRadius: 6 },
+        label: {
+          show: true,
+          position: 'center',
+          formatter: () => `{a|${total}}\n{b|总调用数}`,
+          rich: {
+            a: { fontSize: 26, fontWeight: 700, color: '#1f2430', lineHeight: 32 },
+            b: { fontSize: 12, color: '#8a91a6' },
+          },
+        },
+        labelLine: { show: false },
+        emphasis: {
+          scale: true,
+          scaleSize: 6,
+          label: { show: true },
+        },
+        // 扇区 hover 时显示名称+数值
+        data: [
+          { name: '成功', value: success },
+          { name: '失败', value: failed },
+          { name: '跳过', value: skipped },
+        ],
+      },
+    ],
+    // 无数据时给出占位提示
+    graphic: empty
+      ? [
+          {
+            type: 'text',
+            left: 'center',
+            top: '44%',
+            style: { text: '暂无数据', fill: '#8a91a6', fontSize: 14 },
+          },
+        ]
+      : [],
+  }
+})
 </script>
 
 <template>
@@ -210,6 +292,7 @@ onMounted(() => setLastDays(30))
         <button class="btn btn-sm" :class="{ active: activePreset === '7' }" @click="setLastDays(7)">近 7 天</button>
         <button class="btn btn-sm" :class="{ active: activePreset === '30' }" @click="setLastDays(30)">近 30 天</button>
         <button class="btn btn-sm" :class="{ active: activePreset === 'all' }" @click="clearRange">全部</button>
+        <button class="btn btn-sm btn-query" @click="onQuery" title="按上方自定义日期范围查询">查询</button>
       </div>
       <div class="toolbar-actions">
         <button class="btn" @click="load" title="刷新数据">
@@ -236,19 +319,30 @@ onMounted(() => setLastDays(30))
       <EChart v-else :option="dailyOption" height="360px" />
     </section>
 
-    <!-- 调用排行榜 -->
-    <section class="card chart-card">
-      <header class="cc-head">
-        <h2 class="cc-title">定时任务调用排行榜</h2>
-        <span class="cc-sub">按调用次数降序（Top 10）</span>
-      </header>
-      <div v-if="loading && ranking.length === 0" class="chart-skeleton"></div>
-      <EChart v-else-if="ranking.length" :option="rankingOption" height="420px" />
-      <div v-else class="empty">
-        <svg viewBox="0 0 24 24" width="40" height="40"><path d="M5 4h11l3 3v13H5z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M8 11h8M8 15h8M8 19h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-        <span>暂无调用记录</span>
-      </div>
-    </section>
+    <!-- 排行榜 + 饼图：并排展示 -->
+    <div class="dual">
+      <section class="card chart-card">
+        <header class="cc-head">
+          <h2 class="cc-title">定时任务调用排行榜</h2>
+          <span class="cc-sub">按调用次数降序（Top 10）</span>
+        </header>
+        <div v-if="loading && ranking.length === 0" class="chart-skeleton"></div>
+        <EChart v-else-if="ranking.length" :option="rankingOption" height="420px" />
+        <div v-else class="empty">
+          <svg viewBox="0 0 24 24" width="40" height="40"><path d="M5 4h11l3 3v13H5z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M8 11h8M8 15h8M8 19h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          <span>暂无调用记录</span>
+        </div>
+      </section>
+
+      <section class="card chart-card">
+        <header class="cc-head">
+          <h2 class="cc-title">执行结果分布</h2>
+          <span class="cc-sub">成功 / 失败 / 跳过</span>
+        </header>
+        <div v-if="loading && !overview" class="chart-skeleton"></div>
+        <EChart v-else :option="pieOption" height="420px" />
+      </section>
+    </div>
   </div>
 </template>
 
@@ -398,6 +492,28 @@ onMounted(() => setLastDays(30))
   }
   .toolbar-actions .btn {
     flex: 1;
+  }
+}
+
+/* 排行榜 + 饼图 并排 */
+.dual {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.btn-query {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+.btn-query:hover {
+  filter: brightness(1.05);
+}
+
+@media (max-width: 980px) {
+  .dual {
+    grid-template-columns: 1fr;
   }
 }
 </style>

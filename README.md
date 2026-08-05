@@ -164,6 +164,10 @@ docker run -d --name krono-job \
 - 启动日志可见 Redis / PostgreSQL 初始化、角色库扩展创建、Scheduler/Worker 启动。
 - 已修复：`sdc_refresh_user_token` 任务的 cron 表达式原采用 Quartz 风格（`0 0,30 * * * ?`），在 asynq 标准 5 字段
   cron 下被误解析为「小时 30」而报错；已改为标准写法 `0,30 * * * *`（每 30 分钟触发一次）。
+- **cron 时区**：所有 `cron` 表达式按 `config.yaml` 的 `timezone` 字段解析（默认 `Asia/Shanghai`，支持 IANA 名如 `America/New_York` 或 `Local`）。
+  这一项**不依赖宿主机本地时区**——容器/termux 常默认 UTC，若不显式配置会导致「日志看着像没执行」。启动时日志会打印 `scheduler started ... timezone=Asia/Shanghai`，
+  配合 `redis-cli ZRANGE asynq:scheduler 0 -1 WITHSCORES` 查看各 entry 的**下次执行 Unix 时间戳**，即可核对触发时刻是否如预期。
+  - 常见误区：`0,5 * * * *` 是「每小时第 0、5 分各一次」（每天 24 次）；**「每 5 分钟」应写 `*/5 * * * *`**。
 - 构建若提示 `exec format error`：确保 `build/entrypoint.sh` 为 Unix 换行（LF，无 BOM）。
 
 ---

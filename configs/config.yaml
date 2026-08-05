@@ -56,3 +56,9 @@ cluster:
                                                     # true=对 HTTPS 下游跳过证书校验（内网自签/证书 IP 不匹配时直接访问）；
                                                     # false=保持默认安全校验，证书不信任将调用失败（默认）。
 
+# cron 调度时区：所有 jobs.yaml 中 cron 表达式均按此时区解析与触发。
+# 支持 IANA 时区名（如 Asia/Shanghai、America/New_York）或 "Local"（跟随运行环境）。
+# 默认 Asia/Shanghai——避免依赖宿主机本地时区（如容器/termux 默认 UTC）导致
+# 「日志看着像没执行」的困惑。启动时会在日志打印实际生效的 timezone，便于核对。
+timezone: "Asia/Shanghai"            # KRONO_TIMEZONE
+

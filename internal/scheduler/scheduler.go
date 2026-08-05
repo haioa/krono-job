@@ -25,6 +25,7 @@ type Scheduler struct {
 	redis *redis.Client
 	log   *zap.SugaredLogger
 	path  string
+	loc   *time.Location // cron 调度时区（来自 config.Timezone，默认 Asia/Shanghai）
 
 	asynq *asynq.Scheduler
 
@@ -40,11 +41,16 @@ type Scheduler struct {
 }
 
 // New 构造一个调度器。redisClient 与仓库共用同一连接池（asynq Shutdown 对共享连接为 no-op）。
-func New(redisClient *redis.Client, jobsPath string, log *zap.SugaredLogger) *Scheduler {
+// loc 为 cron 调度时区（来自 config.Timezone，默认 Asia/Shanghai），与日志/排查直觉保持一致。
+func New(redisClient *redis.Client, jobsPath string, log *zap.SugaredLogger, loc *time.Location) *Scheduler {
+	if loc == nil {
+		loc = time.Local
+	}
 	return &Scheduler{
 		redis:      redisClient,
 		log:        log,
 		path:       jobsPath,
+		loc:        loc,
 		entries:    make(map[string]string),
 		shutdownCh: make(chan struct{}),
 		doneCh:     make(chan struct{}),
@@ -62,8 +68,8 @@ func (s *Scheduler) Start() error {
 	s.shutdownCh = make(chan struct{})
 	s.doneCh = make(chan struct{})
 	s.asynq = asynq.NewSchedulerFromRedisClient(s.redis, &asynq.SchedulerOpts{
-		// 使用本地时区，使 cron 表达更直观；默认 UTC。
-		Location: time.Local,
+		// cron 调度时区来自 config.Timezone（默认 Asia/Shanghai），与日志/排查直觉一致。
+		Location: s.loc,
 	})
 
 	// 初次加载：即使失败也仅告警，保留空调度（PLAN §6.3 保护）。
@@ -87,7 +93,7 @@ func (s *Scheduler) Start() error {
 	}
 
 	go s.watchLoop()
-	s.log.Infow("scheduler started", "watch", s.path)
+	s.log.Infow("scheduler started", "watch", s.path, "timezone", s.loc.String())
 	return nil
 }
 
