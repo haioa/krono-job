@@ -19,18 +19,21 @@ import (
 //   - http：优先对 <endpoint>/healthz 发 HEAD 请求，非 5xx 即视为存活；
 //     若无法解析出 healthz 路径，则退回 TCP dial。
 type Probe struct {
-	timeout time.Duration
-	client  *net.Dialer
+	timeout       time.Duration
+	client        *net.Dialer
+	skipVerifyTLS bool
 }
 
 // NewProbe 构造探活器，timeout 为单次探测上限（建议 1~3s，避免拖慢分发）。
-func NewProbe(timeout time.Duration) *Probe {
+// skipVerifyTLS 为 true 时，对 HTTPS 下游跳过证书校验（与分发调用保持一致）。
+func NewProbe(timeout time.Duration, skipVerifyTLS bool) *Probe {
 	if timeout <= 0 {
 		timeout = 2 * time.Second
 	}
 	return &Probe{
-		timeout: timeout,
-		client:  &net.Dialer{Timeout: timeout},
+		timeout:       timeout,
+		client:        &net.Dialer{Timeout: timeout},
+		skipVerifyTLS: skipVerifyTLS,
 	}
 }
 
@@ -45,7 +48,7 @@ func (p *Probe) Check(ctx context.Context, endpoint, protocol string) (bool, err
 		// 尝试 healthz 探活；解析失败则退回 TCP。
 		u, err := url.Parse(endpoint)
 		if err == nil && u.Host != "" {
-			hc := &httpClient{timeout: p.timeout}
+			hc := &httpClient{timeout: p.timeout, skipVerifyTLS: p.skipVerifyTLS}
 			live, err := hc.head(ctx, endpoint+"/healthz")
 			if err == nil {
 				return live, nil

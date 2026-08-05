@@ -59,7 +59,7 @@ jobs:
     enabled: true
     timeout: 30s
     retry: 0                          # 测试期不重试，失败立即落日志方便定位
-    endpoint: "192.168.31.45:20002"  # 下游 host:port，请通过环境变量注入或直接改为实际地址
+    endpoint: "192.168.31.45:20001,192.168.31.45:20001"  # 下游 host:port，请通过环境变量注入或直接改为实际地址
     grpc_service: "sdc.Invoke"        # 包.服务
     grpc_method: "RefreshUserToken"   # -> /sdc.Invoke/RefreshUserToken
     request_type: "sdc.RefreshUserTokenReq"
@@ -70,14 +70,14 @@ jobs:
       x-krono-task: ""
 
   # ---- 调试任务：用于排查「定时任务为何不生效」（GET 无参，每分钟触发）----
-  - name: 调试-Http接口配置探测
-    task_type: debug_ui_config_probe
-    cron: "* * * * *"               # 每分钟触发一次，便于快速观察是否真的被执行
+  - name: lucky内网穿透
+    task_type: lucky_health
+    cron: "0,30 * * * *"               # 每分钟触发一次，便于快速观察是否真的被执行
     protocol: http
     enabled: true
     timeout: 30s
     retry: 0                        # 不重试，失败立即落 failed 日志，方便定位问题
-    endpoint: "https://192.168.31.45:9696/admin/api/v1/ui/config"
+    endpoint: "https://192.168.31.45:16677/ycjk/#/about"
     method: GET                     # GET 请求，无任何参数、无请求体
 
   # ---- 分布式多节点示例：endpoints + lb_strategy（需 cluster.enabled=true 才生效）----

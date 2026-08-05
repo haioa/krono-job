@@ -37,14 +37,15 @@ type Worker struct {
 	repo   *repository.Repository
 	log    *zap.SugaredLogger
 	pool   *grpcpool.Pool
-	health *cluster.NodeHealth // 调用方主动探测的下游存活缓存（心跳由调用方完成，下游无感知）
-	nodeID string              // 本节点标识，写入探测结果供观测
+	health         *cluster.NodeHealth // 调用方主动探测的下游存活缓存（心跳由调用方完成，下游无感知）
+	nodeID         string              // 本节点标识，写入探测结果供观测
+	skipVerifyTLS  bool                // HTTPS 下游跳过证书校验（内网自签/证书 IP 不匹配时直接访问）
 }
 
 // New 构造 Worker。redisOpt 通常基于 config.Redis 构造为 asynq.RedisClientOpt，
 // 与仓库共用同一 Redis 实例（各自维护连接池）。
 // health 可为 nil：为 nil 时 Worker 不感知节点存活，按配置 endpoints 直接调用（无 LB 过滤）。
-func New(redisOpt asynq.RedisConnOpt, repo *repository.Repository, log *zap.SugaredLogger, health *cluster.NodeHealth, nodeID string) *Worker {
+func New(redisOpt asynq.RedisConnOpt, repo *repository.Repository, log *zap.SugaredLogger, health *cluster.NodeHealth, nodeID string, skipVerifyTLS bool) *Worker {
 	srv := asynq.NewServer(redisOpt, asynq.Config{
 		Concurrency: workerConcurrency,
 		Queues:      map[string]int{model.QueueDefault: 1},
@@ -52,12 +53,13 @@ func New(redisOpt asynq.RedisConnOpt, repo *repository.Repository, log *zap.Suga
 		ShutdownTimeout: 30 * time.Second,
 	})
 	w := &Worker{
-		srv:    srv,
-		repo:   repo,
-		log:    log,
-		pool:   grpcpool.New(),
-		health: health,
-		nodeID: nodeID,
+		srv:           srv,
+		repo:          repo,
+		log:           log,
+		pool:          grpcpool.New(),
+		health:        health,
+		nodeID:        nodeID,
+		skipVerifyTLS: skipVerifyTLS,
 	}
 	w.mux = asynq.NewServeMux()
 	w.mux.HandleFunc(scheduler.DispatchTaskType, w.handle)
@@ -166,7 +168,7 @@ func (w *Worker) handle(ctx context.Context, task *asynq.Task) error {
 
 	switch def.Protocol {
 	case model.ProtocolHTTP:
-		res, e := httputil.Do(ctx, def)
+		res, e := httputil.Do(ctx, def, w.skipVerifyTLS)
 		if e != nil {
 			callErr = e
 			w.log.Warnw("http call failed", "task_type", def.TaskType, "endpoint", def.Endpoint, "err", e)

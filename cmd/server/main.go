@@ -90,7 +90,7 @@ func main() {
 		// 探测结果在 Redis 的 TTL 取探测间隔的 1.5 倍，超过未刷新即视为节点失联。
 		const probeInterval = 10 * time.Second
 		healthTTL := probeInterval * 3 / 2
-		health = cluster.NewNodeHealth(cfg.Cluster.ProbeTimeout, repo.Redis, cfg.Cluster.HealthKey, healthTTL)
+		health = cluster.NewNodeHealth(cfg.Cluster.ProbeTimeout, repo.Redis, cfg.Cluster.HealthKey, healthTTL, cfg.Cluster.SkipVerifyTLS)
 
 		// Leader 选举：只有抢到选主锁的节点才运行 Asynq Scheduler（触发 krono:dispatch），
 		// 其余节点作为纯 Worker 消费任务，避免多实例重复触发同一任务。
@@ -144,7 +144,7 @@ func main() {
 		Password: cfg.Redis.Password,
 		DB:       cfg.Redis.DB,
 	}
-	wkr := worker.New(redisOpt, repo, log, health, nodeID)
+	wkr := worker.New(redisOpt, repo, log, health, nodeID, cfg.Cluster.SkipVerifyTLS)
 	wkr.Start()
 	defer wkr.Shutdown()
 

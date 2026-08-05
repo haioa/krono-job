@@ -5,6 +5,7 @@ package httputil
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +13,16 @@ import (
 
 	"github.com/haioa/krono-job/internal/scheduler"
 )
+
+// tlsConfig 构造 HTTP 客户端的 TLS 配置。
+// skipVerify 为 true 时跳过证书校验（InsecureSkipVerify），用于内网自签/证书 IP 不匹配的下游；
+// 为 false 时返回 nil，沿用 Go 默认的安全校验。
+func tlsConfig(skipVerify bool) *tls.Config {
+	if !skipVerify {
+		return nil
+	}
+	return &tls.Config{InsecureSkipVerify: true}
+}
 
 // DefaultMethod 是 HTTP 任务的默认请求方法。
 const DefaultMethod = "POST"
@@ -24,7 +35,9 @@ type Result struct {
 
 // Do 按 JobDef 发送一次 HTTP 请求，返回响应体、状态码与错误。
 // timeout 由 def.TimeoutDuration() 控制；ctx 取消（含 Asynq 任务超时）也会中止请求。
-func Do(ctx context.Context, def scheduler.JobDef) (*Result, error) {
+// skipVerifyTLS 为 true 时，对 HTTPS 下游跳过证书校验（用于内网自签/证书 IP 不匹配的端点），
+// 普通 HTTP 不受影响。
+func Do(ctx context.Context, def scheduler.JobDef, skipVerifyTLS bool) (*Result, error) {
 	method := def.Method
 	if method == "" {
 		method = DefaultMethod
@@ -50,7 +63,12 @@ func Do(ctx context.Context, def scheduler.JobDef) (*Result, error) {
 		req.Header.Set(k, v)
 	}
 
-	client := &http.Client{Timeout: def.TimeoutDuration()}
+	client := &http.Client{
+		Timeout: def.TimeoutDuration(),
+		Transport: &http.Transport{
+			TLSClientConfig: tlsConfig(skipVerifyTLS),
+		},
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("http do: %w", err)

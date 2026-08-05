@@ -35,8 +35,9 @@ type ClusterConfig struct {
 	LeaderKey    string        `mapstructure:"leader_key"`    // 选主锁 Redis key，默认 krono:leader
 	LeaderTTL    time.Duration `mapstructure:"leader_ttl"`    // 选主锁 TTL，默认 10s
 	HealthKey    string        `mapstructure:"health_key"`    // 下游存活探测结果 Redis hash key，默认 krono:node_health
-	ProbeTimeout time.Duration `mapstructure:"probe_timeout"` // 下游存活探测超时，默认 2s
-	DefaultLB    string        `mapstructure:"default_lb"`    // 任务未显式指定 lb_strategy 时使用的默认策略，默认 round_robin
+	ProbeTimeout   time.Duration `mapstructure:"probe_timeout"`     // 下游存活探测超时，默认 2s
+	DefaultLB      string        `mapstructure:"default_lb"`        // 任务未显式指定 lb_strategy 时使用的默认策略，默认 round_robin
+	SkipVerifyTLS  bool          `mapstructure:"skip_verify_tls"`   // 下游为内网自签/证书 IP 不匹配的 HTTPS 时，跳过证书校验直接访问（默认 false，保持安全）
 }
 
 // Distributed 便捷判断：是否启用分布式模式。

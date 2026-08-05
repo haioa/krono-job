@@ -24,8 +24,9 @@ type NodeHealth struct {
 	ttl     time.Duration // 单条探测结果在 Redis 的存活窗口；超过未更新即视为过期（节点失联）
 	timeout time.Duration // 单次探测超时（透传给 Probe）
 
-	mu    sync.RWMutex
-	cache map[string]entry // 本地内存缓存，用于分发决策快速命中
+	mu            sync.RWMutex
+	cache         map[string]entry // 本地内存缓存，用于分发决策快速命中
+	skipVerifyTLS bool             // HTTPS 下游跳过证书校验（与分发调用保持一致）
 }
 type entry struct {
 	alive   bool
@@ -46,7 +47,8 @@ type probeRecord struct {
 // NewNodeHealth 构造节点健康缓存。
 //   - probeTimeout：单次探测超时（建议 1~3s）。
 //   - rdb / key / ttl：可选，非 nil 时探测结果写入 Redis 共享；为 nil 时仅本地缓存（单实例可用）。
-func NewNodeHealth(probeTimeout time.Duration, rdb *redis.Client, key string, ttl time.Duration) *NodeHealth {
+//   - skipVerifyTLS：HTTPS 下游跳过证书校验（与分发调用保持一致，默认 false 安全）。
+func NewNodeHealth(probeTimeout time.Duration, rdb *redis.Client, key string, ttl time.Duration, skipVerifyTLS bool) *NodeHealth {
 	if probeTimeout <= 0 {
 		probeTimeout = 2 * time.Second
 	}
@@ -54,12 +56,13 @@ func NewNodeHealth(probeTimeout time.Duration, rdb *redis.Client, key string, tt
 		ttl = 30 * time.Second // 默认 Redis 结果窗口 30s，需由周期探测器在窗口内刷新
 	}
 	return &NodeHealth{
-		probe:   NewProbe(probeTimeout),
-		rdb:     rdb,
-		key:     key,
-		ttl:     ttl,
-		timeout: probeTimeout,
-		cache:   make(map[string]entry),
+		probe:         NewProbe(probeTimeout, skipVerifyTLS),
+		rdb:           rdb,
+		key:           key,
+		ttl:           ttl,
+		timeout:       probeTimeout,
+		skipVerifyTLS: skipVerifyTLS,
+		cache:         make(map[string]entry),
 	}
 }
 

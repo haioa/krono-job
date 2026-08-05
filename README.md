@@ -306,7 +306,7 @@ v2 起支持真正的分布式运行：多个 `krono-job` 实例共享同一 Red
 | 能力 | 实现 | 说明 |
 | --- | --- | --- |
 | 调度高可用（去重） | Redis 选主（Leader Election） | 多实例竞争同一把 Redis 锁，仅 **Leader** 运行 Asynq Scheduler 触发 `krono:dispatch`；其余实例作为纯 Worker 消费。Leader 宕机后锁过期，其它节点自动接任（failover）。 |
-| 下游存活判定（探活） | 调用方主动探测（Probe） | **下游节点不注册、不写 Redis**（避免臃肿服务适配注册协议）。存活完全由 krono-job 主动探测决定：分发前对候选 endpoint 做轻量探测（gRPC=标准 Health 协议回退 TCP，HTTP=HEAD /healthz 或 TCP dial），失败即剔除；探测结果按 TTL 缓存在内存，供选目标与观测。 |
+| 下游存活判定（探活） | 调用方主动探测（Probe） | **下游节点不注册、不写 Redis**（避免臃肿服务适配注册协议）。存活完全由 krono-job 主动探测决定：分发前对候选 endpoint 做轻量探测（gRPC=标准 Health 协议回退 TCP 连通；HTTP=HEAD /healthz，**连接失败/超时/5xx 一律判不健康，不会因 TCP 端口通就误判存活**），失败即剔除；探测结果写入 Redis 集中共享（前端看板与各实例统一读取），本地内存缓存加速分发决策。 |
 | 负载均衡 | `internal/loadbalance` | 从「配置且存活」的节点中按策略选目标：`round_robin`（默认）/ `least_conn` / `random` / `consistent`（一致哈希，同 `task_type` 稳定命中同节点）。 |
 
 ### 9.2 启用方式
@@ -351,6 +351,27 @@ v2 起支持真正的分布式运行：多个 `krono-job` 实例共享同一 Red
 3. 业务 RPC 接口本身无需探活——标准 health 已能反映进程是否处理了 RPC；若要更严格（验证某业务 method 真的可用），可在下游自行把该 method 的就绪状态写入 health 的 `ServingStatus`。
 
 > 探测使用与下游调用一致的 insecure 明文连接；如需 mTLS，在 `internal/cluster/grpc_health.go` 的 `grpc.NewClient` 处扩展 `credentials` 即可（与 `pkg/grpcpool` 同步）。
+
+### 9.2.2 内网 HTTPS 下游跳过证书校验
+
+下游若是内网自签证书、或证书绑定的 IP 与实际访问 IP 不一致（例如证书签发给 `192.168.31.1` 但实际访问 `192.168.31.45`），Go 默认会拒绝 TLS 连接，报错类似：
+
+```
+http do: Get "https://192.168.31.45:16677/...": tls: failed to verify certificate:
+x509: certificate is valid for 192.168.1.1, 192.168.31.1, ... not 192.168.31.45
+```
+
+此时开启跳过证书校验即可「直接访问、不拒绝」：
+
+```yaml
+cluster:
+  skip_verify_tls: true    # KRONO_CLUSTER_SKIP_VERIFY_TLS（默认 false，保持安全校验）
+```
+
+- 该开关**同时作用于分发调用（`pkg/httputil`）与存活探测（`cluster` 的 HTTP 探活）**，保证两端语义一致：要么都跳过、要么都校验。
+- `false`（默认）时保持标准安全校验，证书不信任会调用失败并记入 `job_exec_log`（符合生产安全要求）。
+- 仅影响 **HTTPS** 下游；普通 HTTP 不受影响。
+- 如确需兼顾安全，建议下游改用与访问地址匹配的证书或公网可信 CA，而非长期跳过校验。
 
 ### 9.3 运维观测
 
