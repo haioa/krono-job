@@ -59,7 +59,12 @@ jobs:
     enabled: true
     timeout: 30s
     retry: 0                          # 测试期不重试，失败立即落日志方便定位
-    endpoint: "192.168.31.45:20001,192.168.31.45:20001"  # 下游 host:port，请通过环境变量注入或直接改为实际地址
+    # 多节点：用 endpoints（YAML 数组），不要用逗号塞进单个 endpoint！
+    # 数组优先级高于 endpoint；仅一个元素时退化为单节点直连。
+    endpoints:
+      - "192.168.31.45:20001"
+      - "192.168.31.15:20001"        # 第二个节点（没有就删掉这一行）
+    lb_strategy: "round_robin"        # round_robin | least_conn | random | consistent
     grpc_service: "sdc.Invoke"        # 包.服务
     grpc_method: "RefreshUserToken"   # -> /sdc.Invoke/RefreshUserToken
     request_type: "sdc.RefreshUserTokenReq"
@@ -77,7 +82,12 @@ jobs:
     enabled: true
     timeout: 30s
     retry: 0                        # 不重试，失败立即落 failed 日志，方便定位问题
-    endpoint: "https://192.168.31.45:16677/ycjk/#/about"
+    # 注意：endpoint 必须是下游的【真实接口路径】，".../#/about" 是前端页面 hash，不是 API！
+    # 多节点用 endpoints 数组（不要逗号塞进 endpoint）；HTTPS 证书不匹配时开 cluster.skip_verify_tls。
+    endpoints:
+      - "https://192.168.31.45:16677/api/health"   # TODO: 换成真实接口路径
+      - "https://192.168.31.46:16677/api/health"   # 第二个节点（没有就删掉）
+    lb_strategy: "round_robin"
     method: GET                     # GET 请求，无任何参数、无请求体
 
   # ---- 分布式多节点示例：endpoints + lb_strategy（需 cluster.enabled=true 才生效）----
