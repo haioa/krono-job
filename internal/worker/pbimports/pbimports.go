@@ -10,4 +10,5 @@
 // request_type 描述调用即可。当前无任何下游 pb 依赖，故为空包。
 package pbimports
 
-import _ "gitee.com/haioa/sdc-grpc/pkg/grpc/v1/sdc"
+// 这里放你的 grpc 调用 client pb 的代码，直接使用你的项目 proto 文件为止的仓库代码就行了
+//import _ "gitee.com/haioa/sdc-grpc/pkg/grpc/v1/sdc"
