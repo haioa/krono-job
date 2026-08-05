@@ -373,6 +373,61 @@ cluster:
 - 仅影响 **HTTPS** 下游；普通 HTTP 不受影响。
 - 如确需兼顾安全，建议下游改用与访问地址匹配的证书或公网可信 CA，而非长期跳过校验。
 
+### 9.2.3 接入新的下游 gRPC 服务
+
+krono-job 通过「通用适配器」调用下游 gRPC：**不写死任何下游方法**，新增服务时本仓库业务代码 **零改动**，只需两步。
+
+#### 调用链路（三处，你不需要逐个手写）
+
+| 文件 | 作用 |
+|------|------|
+| `pkg/grpcpool/pool.go` | 按 `endpoint`（如 `192.168.31.45:20001`）维护 `*grpc.ClientConn` 连接池，`grpc.NewClient` 懒连接；MVP 用 insecure 明文。 |
+| `internal/worker/adapter/adapter.go` | **通用适配器**：从 `jobs.yaml` 的 `grpc_service` / `grpc_method` / `request_type` 取出消息类型、拼出方法名 `/包.服务/方法`，用 `conn.Invoke(...)` 统一调用。`reply` 由方法描述符的输出类型用 `dynamicpb` 动态构造，无需声明。 |
+| `internal/worker/pbimports/pbimports.go` | 「引入下游 pb」的唯一入口：加一行 `import _ "..."` 触发其 `init`，把 protobuf 描述符注册进全局注册表 `protoregistry.GlobalTypes / GlobalFiles`。 |
+
+> Worker 触发任务时：`pool.Get(endpoint)` → `adapter.Invoke(ctx, def, conn)`，全部自动完成。
+
+#### 接入步骤
+
+**第 1 步：在 `pbimports.go` 引入下游 pb 包**（这是「引入 grpc client 代码」的唯一动作）
+
+```go
+// internal/worker/pbimports/pbimports.go
+package pbimports
+
+import (
+    _ "gitee.com/haioa/sdc-grpc/pkg/grpc/v1/sdc"   // 已有示例：门禁服务
+    _ "你的/module/path/to/new/downstream/pb"        // 新增：新下游服务
+)
+```
+
+匿名 `import _` 会在进程启动时注册该服务的消息/方法描述符。**漏加这一行不会编译报错，但运行时会报**：
+`find request type "xxx": ... (是否漏加 import _ "downstream/pb"?)`，提示你回来补。
+
+**第 2 步：在 `jobs.yaml` 用三个字段描述调用**（不需要写任何 Go 对接代码）
+
+```yaml
+protocol: grpc
+grpc_service: "sdc.Invoke"          # 对应 pb 里的 package.Service
+grpc_method: "RefreshUserToken"     # 方法名
+request_type: "sdc.RefreshUserTokenReq"  # 请求消息全名（用于从注册表取类型 + protojson 填充 payload）
+endpoints:                           # 多节点数组（逗号塞进 endpoint 会报错）
+  - "192.168.31.45:20001"
+  - "192.168.31.46:20001"
+lb_strategy: "round_robin"           # round_robin | least_conn | random | consistent
+payload:                             # 会被 protojson 反序列化为 request_type 消息
+  uid: ""
+  refresh_token: ""
+metadata:
+  x-krono-task: ""
+```
+
+#### 两个易错点
+
+- `adapter.go` **本身不依赖任何具体 pb 包**（只 import grpc/protobuf 标准库 + scheduler），所以才叫「通用」。真正「引入下游代码」只在 `pbimports.go` 那一行 `import _`。
+- 换下游服务但忘了在 `pbimports.go` 加 import → **运行时**报错（类型从注册表查不到），不是编译期。
+- 多节点用 `endpoints:`（YAML 数组），**不要用逗号把多个地址塞进单个 `endpoint:`**，否则整体被当成一个地址连不上。
+
 ### 9.3 运维观测
 
 - `GET /api/cluster/status`：返回本节点角色（`leader` / `follower` / `standalone`）。
@@ -386,3 +441,6 @@ cluster:
 - `internal/loadbalance/loadbalance.go`：负载均衡策略。
 - `internal/worker/worker.go` 的 `selectEndpoint`：分发前「探测过滤 + 负载均衡」选目标。
 - `internal/scheduler/jobdef.go`：`JobDef.Endpoints` / `LBStrategy` 配置与解析。
+- `internal/worker/pbimports/pbimports.go`：**接入新下游 gRPC 服务的唯一改动点**（`import _ "downstream/pb"` 注册描述符）。
+- `internal/worker/adapter/adapter.go`：gRPC 通用适配器（按 `grpc_service`/`grpc_method`/`request_type` 动态调用，不写死方法）。
+- `pkg/grpcpool/pool.go`：按 endpoint 复用的 gRPC 连接池。
