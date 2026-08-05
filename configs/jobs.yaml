@@ -54,7 +54,7 @@ jobs:
   # ---- 测试任务：调用 sdc.Invoke/RefreshUserToken 刷新用户 token（每 30 分钟触发）----
   - name: 南阳盛世门禁-刷新用户token
     task_type: sdc_refresh_user_token
-    cron: "0,30 * * * *"                 # 每 30 分钟触发一次（每小时的 0 分与 30 分）；asynq 为标准 5 字段 cron：分 时 日 月 周
+    cron: "*/5 * * * *"                 # 每 5 分钟触发一次（分字段步长）；asynq 为标准 5 字段 cron：分 时 日 月 周
     protocol: grpc
     enabled: true
     timeout: 30s
@@ -77,7 +77,7 @@ jobs:
   # ---- 调试任务：用于排查「定时任务为何不生效」（GET 无参，每分钟触发）----
   - name: lucky内网穿透
     task_type: lucky_health
-    cron: "0,30 * * * *"               # 每分钟触发一次，便于快速观察是否真的被执行
+    cron: "0,30 * * * *"               # 每小时的 0 分与 30 分触发（每 30 分钟一次），便于快速观察是否真的被执行
     protocol: http
     enabled: true
     timeout: 30s
