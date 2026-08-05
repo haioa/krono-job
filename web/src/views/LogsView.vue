@@ -54,6 +54,18 @@ const statusOptions: { value: ExecStatus; label: string }[] = [
   { value: 'failed', label: '失败' },
   { value: 'skipped', label: '跳过' },
 ]
+
+// 状态中文映射，用于表格徽章显示。
+const statusLabel: Record<ExecStatus, string> = {
+  success: '成功',
+  failed: '失败',
+  skipped: '跳过',
+}
+// 触发类型中文映射。
+const triggerLabel: Record<string, string> = {
+  manual: '手动',
+  cron: '定时',
+}
 const protocolOptions = [
   { value: 'http', label: 'HTTP' },
   { value: 'grpc', label: 'gRPC' },
@@ -354,9 +366,9 @@ onMounted(async () => {
               </td>
               <td class="mono nowrap">{{ fmt(log.created_at) }}</td>
               <td class="mono">{{ taskTypeName[log.task_type] || log.task_type }}</td>
-              <td><span class="badge" :class="log.status">{{ log.status }}</span></td>
+              <td><span class="badge" :class="log.status">{{ statusLabel[log.status] }}</span></td>
               <td>{{ (log.protocol || '').toUpperCase() }}</td>
-              <td><span class="badge" :class="log.trigger_type === 'manual' ? 'manual' : 'cron'">{{ log.trigger_type }}</span></td>
+              <td><span class="badge trigger" :class="log.trigger_type">{{ triggerLabel[log.trigger_type] || log.trigger_type }}</span></td>
               <td class="mono ellipsis" :title="log.target_endpoint">{{ log.target_endpoint }}</td>
               <td>{{ log.retry_count }}</td>
               <td class="mono">{{ dur(log.execution_duration_ms) }}</td>

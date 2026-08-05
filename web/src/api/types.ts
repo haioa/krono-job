@@ -29,6 +29,7 @@ export interface JobView {
   enabled: boolean
   paused: boolean
   endpoint: string
+  endpoints: string[]
   method: string
   retry: number
   timeout: string

@@ -15,6 +15,11 @@ const error = ref('')
 const notice = ref('')
 const busy = ref<string | null>(null)
 const running = ref<string | null>(null)
+const expanded = ref<string | null>(null) // 展开显示目标地址列表的任务 task_type
+
+function toggleExpand(taskType: string) {
+  expanded.value = expanded.value === taskType ? null : taskType
+}
 
 const pausedCount = computed(() => jobs.value.filter((j) => j.paused).length)
 const runningCount = computed(() => jobs.value.filter((j) => !j.paused).length)
@@ -163,7 +168,25 @@ onMounted(load)
               <td class="mono">{{ job.task_type }}</td>
               <td><span class="tag" :class="job.protocol">{{ protocolTag(job.protocol) }}</span></td>
               <td class="mono">{{ job.cron }}</td>
-              <td class="mono ellipsis" :title="job.endpoint">{{ job.endpoint }}</td>
+              <td class="endpoint-cell">
+                <template v-if="(job.endpoints && job.endpoints.length) || job.endpoint">
+                  <button
+                    class="ep-toggle"
+                    :class="{ open: expanded === job.task_type }"
+                    @click="toggleExpand(job.task_type)"
+                  >
+                    <span class="ep-count">{{ (job.endpoints && job.endpoints.length) ? job.endpoints.length : 1 }}</span>
+                    <span class="ep-unit">个节点</span>
+                    <svg class="ep-caret" viewBox="0 0 24 24" width="13" height="13"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  </button>
+                  <div v-if="expanded === job.task_type" class="ep-list">
+                    <div v-for="(ep, i) in (job.endpoints && job.endpoints.length ? job.endpoints : [job.endpoint])" :key="i" class="ep-item">
+                      <span class="ep-dot"></span>{{ ep }}
+                    </div>
+                  </div>
+                </template>
+                <span v-else class="muted">—</span>
+              </td>
               <td class="mono">{{ job.timeout || '—' }}</td>
               <td>
                 <span v-if="job.paused" class="badge paused">已暂停</span>
@@ -381,6 +404,78 @@ onMounted(load)
   to {
     transform: rotate(360deg);
   }
+}
+
+/* 目标地址：节点数量 + 可展开列表 */
+.endpoint-cell {
+  min-width: 130px;
+}
+.ep-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid var(--border-d);
+  background: var(--panel);
+  border-radius: 999px;
+  cursor: pointer;
+  color: var(--text-2);
+  font-size: 12px;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+.ep-toggle:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--primary-l);
+}
+.ep-toggle.open {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--primary-l);
+}
+.ep-count {
+  font-weight: 700;
+  font-size: 13px;
+}
+.ep-unit {
+  color: var(--muted);
+}
+.ep-toggle.open .ep-unit {
+  color: var(--primary);
+}
+.ep-caret {
+  transition: transform 0.18s ease;
+}
+.ep-toggle.open .ep-caret {
+  transform: rotate(180deg);
+}
+.ep-list {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  max-width: 320px;
+}
+.ep-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  color: var(--text-2);
+  padding: 3px 0;
+  word-break: break-all;
+}
+.ep-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+  flex-shrink: 0;
+}
+.muted {
+  color: var(--muted);
 }
 .alert.info {
   display: flex;

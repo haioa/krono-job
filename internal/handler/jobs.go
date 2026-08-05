@@ -29,16 +29,17 @@ func NewJobsHandler(repo *repository.Repository, jobsPath string, client *asynq.
 
 // JobView 是 GET /api/jobs 返回的精简任务视图。
 type JobView struct {
-	Name     string `json:"name"`
-	TaskType string `json:"task_type"`
-	Cron     string `json:"cron"`
-	Protocol string `json:"protocol"`
-	Enabled  bool   `json:"enabled"`
-	Paused   bool   `json:"paused"`
-	Endpoint string `json:"endpoint"`
-	Method   string `json:"method"`
-	Retry    int    `json:"retry"`
-	Timeout  string `json:"timeout"`
+	Name      string   `json:"name"`
+	TaskType  string   `json:"task_type"`
+	Cron      string   `json:"cron"`
+	Protocol  string   `json:"protocol"`
+	Enabled   bool     `json:"enabled"`
+	Paused    bool     `json:"paused"`
+	Endpoint  string   `json:"endpoint"`            // 单节点地址（endpoints 为空时的回退）
+	Endpoints []string `json:"endpoints"`           // 分布式多节点地址列表（优先级高于 endpoint）
+	Method    string   `json:"method"`
+	Retry     int      `json:"retry"`
+	Timeout   string   `json:"timeout"`
 }
 
 // List 处理 GET /api/jobs，列出 jobs.yaml 中的全部任务定义，并实时标注 paused 状态。
@@ -66,9 +67,10 @@ func (h *JobsHandler) List(c *gin.Context) {
 			Cron:     d.Cron,
 			Protocol: d.Protocol,
 			Enabled:  d.IsEnabled(),
-			Paused:   paused,
-			Endpoint: d.Endpoint,
-			Method:   d.Method,
+			Paused:    paused,
+			Endpoint:  d.Endpoint,
+			Endpoints: d.Endpoints,
+			Method:    d.Method,
 			Retry:    d.Retry,
 			Timeout:  d.Timeout,
 		})
