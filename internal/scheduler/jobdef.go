@@ -35,7 +35,8 @@ type JobDef struct {
 	GRPCService string            `yaml:"grpc_service" json:"grpc_service"`
 	GRPCMethod  string            `yaml:"grpc_method" json:"grpc_method"`
 	RequestType string            `yaml:"request_type" json:"request_type"`
-	Metadata    map[string]string `yaml:"metadata" json:"metadata"`
+	Metadata    map[string]string `yaml:"metadata,omitempty" json:"metadata,omitempty"`
+	Comment     string            `yaml:"comment,omitempty" json:"comment,omitempty"` // 人工维护备注，不进入调度逻辑
 }
 
 // IsEnabled 返回该任务是否纳入调度：enabled 缺省视为 true（决策 §5）。
@@ -165,6 +166,15 @@ func LoadJobsFile(path string) ([]JobDef, error) {
 		return nil, fmt.Errorf("parse jobs file %s: %w", path, err)
 	}
 
+	// 回填每条任务在 YAML 中的备注（comment 字段仅能从 yaml.Node 解析提取）。
+	if seq, e := jobsSeqFromDoc(path); e == nil {
+		for i := range doc.Jobs {
+			if idx := findJobIndex(seq, doc.Jobs[i].TaskType); idx >= 0 {
+				doc.Jobs[i].Comment = extractComment(seq.Content[idx])
+			}
+		}
+	}
+
 	seen := make(map[string]bool, len(doc.Jobs))
 	out := make([]JobDef, 0, len(doc.Jobs))
 	for i := range doc.Jobs {
@@ -179,6 +189,12 @@ func LoadJobsFile(path string) ([]JobDef, error) {
 		out = append(out, def)
 	}
 	return out, nil
+}
+
+// ValidateJob 执行单条任务的必填/枚举校验；cron 表达式合法性交由 Asynq Register 兜底。
+// 供可视化编辑的后端写接口复用，避免非法定义写回 jobs.yaml 导致整体热重载失败。
+func ValidateJob(def JobDef) error {
+	return validateJob(def)
 }
 
 // validateJob 执行单条任务的必填/枚举校验；cron 表达式合法性交由 Asynq Register 兜底。

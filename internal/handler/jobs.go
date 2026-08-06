@@ -3,9 +3,11 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/hibiken/asynq"
+	"github.com/robfig/cron/v3"
 	"go.uber.org/zap"
 
 	"github.com/haioa/krono-job/internal/model"
@@ -182,4 +184,240 @@ func (h *JobsHandler) Run(c *gin.Context) {
 		"trigger_type": model.TriggerTypeManual,
 		"message":      "已投递，稍后可在执行日志查看结果",
 	})
+}
+
+// JobDefView 是可视化编辑用的完整任务定义（含 comment 备注），与 scheduler.JobDef 对应。
+type JobDefView struct {
+	Name        string            `json:"name"`
+	TaskType    string            `json:"task_type"`
+	Cron        string            `json:"cron"`
+	Protocol    string            `json:"protocol"`
+	Enabled     *bool             `json:"enabled"`
+	Timeout     string            `json:"timeout"`
+	Retry       int               `json:"retry"`
+	Endpoint    string            `json:"endpoint"`
+	Endpoints   []string          `json:"endpoints"`
+	LBStrategy  string            `json:"lb_strategy"`
+	Method      string            `json:"method"`
+	Headers     map[string]string `json:"headers"`
+	Payload     map[string]any    `json:"payload"`
+	GRPCService string            `json:"grpc_service"`
+	GRPCMethod  string            `json:"grpc_method"`
+	RequestType string            `json:"request_type"`
+	Metadata    map[string]string `json:"metadata"`
+	Comment     string            `json:"comment"`
+}
+
+func toJobDefView(d scheduler.JobDef) JobDefView {
+	return JobDefView{
+		Name:        d.Name,
+		TaskType:    d.TaskType,
+		Cron:        d.Cron,
+		Protocol:    d.Protocol,
+		Enabled:     d.Enabled,
+		Timeout:     d.Timeout,
+		Retry:       d.Retry,
+		Endpoint:    d.Endpoint,
+		Endpoints:   d.Endpoints,
+		LBStrategy:  d.LBStrategy,
+		Method:      d.Method,
+		Headers:     d.Headers,
+		Payload:     d.Payload,
+		GRPCService: d.GRPCService,
+		GRPCMethod:  d.GRPCMethod,
+		RequestType: d.RequestType,
+		Metadata:    d.Metadata,
+		Comment:     d.Comment,
+	}
+}
+
+func fromJobDefView(v JobDefView) scheduler.JobDef {
+	return scheduler.JobDef{
+		Name:        v.Name,
+		TaskType:    v.TaskType,
+		Cron:        v.Cron,
+		Protocol:    v.Protocol,
+		Enabled:     v.Enabled,
+		Timeout:     v.Timeout,
+		Retry:       v.Retry,
+		Endpoint:    v.Endpoint,
+		Endpoints:   v.Endpoints,
+		LBStrategy:  v.LBStrategy,
+		Method:      v.Method,
+		Headers:     v.Headers,
+		Payload:     v.Payload,
+		GRPCService: v.GRPCService,
+		GRPCMethod:  v.GRPCMethod,
+		RequestType: v.RequestType,
+		Metadata:    v.Metadata,
+		Comment:     v.Comment,
+	}
+}
+
+// ListRaw 处理 GET /api/jobs/raw：返回 jobs.yaml 完整定义（含 comment 备注），供可视化表单回显。
+func (h *JobsHandler) ListRaw(c *gin.Context) {
+	defs, err := scheduler.LoadJobsFile(h.jobsPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "读取 jobs 定义失败: " + err.Error()})
+		return
+	}
+	views := make([]JobDefView, 0, len(defs))
+	for _, d := range defs {
+		views = append(views, toJobDefView(d))
+	}
+	c.JSON(http.StatusOK, gin.H{"list": views, "total": len(views)})
+}
+
+// Create 处理 POST /api/jobs：向 jobs.yaml 追加一条新任务。
+// 采用「读全量 -> 校验去重 -> 追加 -> 整体写回」策略，保证注释与既有任务不被破坏。
+func (h *JobsHandler) Create(c *gin.Context) {
+	var v JobDefView
+	if err := c.ShouldBindJSON(&v); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求体非法: " + err.Error()})
+		return
+	}
+	if err := scheduler.ValidateJob(fromJobDefView(v)); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "校验失败: " + err.Error()})
+		return
+	}
+
+	defs, err := scheduler.LoadJobsFile(h.jobsPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "读取 jobs 定义失败: " + err.Error()})
+		return
+	}
+	for _, d := range defs {
+		if d.TaskType == v.TaskType {
+			c.JSON(http.StatusConflict, gin.H{"error": "task_type 已存在: " + v.TaskType})
+			return
+		}
+	}
+	defs = append(defs, fromJobDefView(v))
+	if err := scheduler.SaveJobsFile(h.jobsPath, defs); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "写入 jobs.yaml 失败: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"task_type": v.TaskType, "message": "已创建"})
+}
+
+// Update 处理 PUT /api/jobs/:task_type：替换 jobs.yaml 中指定任务。
+func (h *JobsHandler) Update(c *gin.Context) {
+	taskType := c.Param("task_type")
+	var v JobDefView
+	if err := c.ShouldBindJSON(&v); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求体非法: " + err.Error()})
+		return
+	}
+	// 路径上的 task_type 优先级最高，防止误改标识。
+	if v.TaskType == "" {
+		v.TaskType = taskType
+	}
+	if v.TaskType != taskType {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "路径 task_type 与请求体不一致"})
+		return
+	}
+	if err := scheduler.ValidateJob(fromJobDefView(v)); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "校验失败: " + err.Error()})
+		return
+	}
+
+	defs, err := scheduler.LoadJobsFile(h.jobsPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "读取 jobs 定义失败: " + err.Error()})
+		return
+	}
+	idx := -1
+	for i := range defs {
+		if defs[i].TaskType == taskType {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "task_type 不存在: " + taskType})
+		return
+	}
+	defs[idx] = fromJobDefView(v)
+	if err := scheduler.SaveJobsFile(h.jobsPath, defs); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "写入 jobs.yaml 失败: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"task_type": taskType, "message": "已更新"})
+}
+
+// Delete 处理 DELETE /api/jobs/:task_type：从 jobs.yaml 移除指定任务。
+func (h *JobsHandler) Delete(c *gin.Context) {
+	taskType := c.Param("task_type")
+	if taskType == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "task_type 必填"})
+		return
+	}
+	defs, err := scheduler.LoadJobsFile(h.jobsPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "读取 jobs 定义失败: " + err.Error()})
+		return
+	}
+	idx := -1
+	for i := range defs {
+		if defs[i].TaskType == taskType {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "task_type 不存在: " + taskType})
+		return
+	}
+	defs = append(defs[:idx], defs[idx+1:]...)
+	if err := scheduler.SaveJobsFile(h.jobsPath, defs); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "写入 jobs.yaml 失败: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"task_type": taskType, "message": "已删除"})
+}
+
+// cronPreviewRequest 是 CronPreview 的请求体。
+type cronPreviewRequest struct {
+	Cron  string `json:"cron"`
+	Count int    `json:"count"`
+}
+
+// CronPreview 处理 POST /api/jobs/cron-preview：根据 cron 表达式计算最近若干次执行时间。
+// 复用与调度内核一致的 robfig/cron/v3 标准 5 字段解析，时区默认 Asia/Shanghai（与调度一致）。
+func (h *JobsHandler) CronPreview(c *gin.Context) {
+	var req cronPreviewRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求体非法: " + err.Error()})
+		return
+	}
+	if req.Cron == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cron 表达式不能为空"})
+		return
+	}
+	if req.Count <= 0 || req.Count > 20 {
+		req.Count = 5
+	}
+
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		loc = time.Local
+	}
+	sched, err := cron.ParseStandard(req.Cron)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cron 表达式不合法: " + err.Error()})
+		return
+	}
+
+	now := time.Now().In(loc)
+	list := make([]string, 0, req.Count)
+	t := now
+	for i := 0; i < req.Count; i++ {
+		next := sched.Next(t)
+		if next.IsZero() {
+			break
+		}
+		list = append(list, next.Format("2006-01-02 15:04:05"))
+		t = next
+	}
+	c.JSON(http.StatusOK, gin.H{"cron": req.Cron, "timezone": loc.String(), "list": list})
 }

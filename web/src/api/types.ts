@@ -40,6 +40,50 @@ export interface JobsResponse {
   total: number
 }
 
+// ---------- 可视化编辑：jobs.yaml 完整定义（含 comment 备注） ----------
+// 与后端 internal/handler/jobs.go 的 JobDefView 保持一致。
+export interface JobDef {
+  name: string
+  task_type: string
+  cron: string
+  protocol: string // 'http' | 'grpc'
+  enabled: boolean | null // 缺省视为 true；显式 false=停注
+  timeout: string
+  retry: number
+  endpoint: string
+  endpoints: string[]
+  lb_strategy: string
+  method: string
+  headers: Record<string, string>
+  payload: Record<string, any>
+  grpc_service: string
+  grpc_method: string
+  request_type: string
+  metadata: Record<string, string>
+  comment: string // 人工维护备注，写回为 YAML 注释
+}
+
+export interface JobDefListResponse {
+  list: JobDef[]
+  total: number
+}
+
+export interface SimpleResponse {
+  task_type?: string
+  message: string
+}
+
+// cron 表达式预览（最近几次执行时间）
+export interface CronPreviewRequest {
+  cron: string
+  count?: number
+}
+export interface CronPreviewResponse {
+  cron: string
+  timezone: string
+  list: string[]
+}
+
 export type ExecStatus = 'success' | 'failed' | 'skipped'
 
 export interface JobExecLog {

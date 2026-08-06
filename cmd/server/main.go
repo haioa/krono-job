@@ -188,6 +188,12 @@ func main() {
 		protected.PUT("/users/:id", usersH.Update)
 		protected.DELETE("/users/:id", usersH.Delete)
 		protected.GET("/jobs", jobsH.List)
+		// 可视化编辑：jobs.yaml 增删改查（注意 /jobs/raw 必须在 /jobs/:task_type 之前注册）。
+		protected.GET("/jobs/raw", jobsH.ListRaw)
+		protected.POST("/jobs/cron-preview", jobsH.CronPreview)
+		protected.POST("/jobs", jobsH.Create)
+		protected.PUT("/jobs/:task_type", jobsH.Update)
+		protected.DELETE("/jobs/:task_type", jobsH.Delete)
 		protected.POST("/jobs/:task_type/pause", jobsH.Pause)
 		protected.POST("/jobs/:task_type/resume", jobsH.Resume)
 		protected.POST("/jobs/:task_type/run", jobsH.Run)

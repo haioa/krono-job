@@ -1,5 +1,5 @@
 import { apiFetch } from './http'
-import type { LoginRequest, LoginResponse, ChangePasswordRequest, JobsResponse, PageResult, LogsQuery, TaskTypeList, JobExecLog, StatsOverview, DailyStatList, TaskRankList, StatsQuery, DeleteLogsResponse, UserListResponse, UserView, CreateUserRequest, UpdateUserRequest, ClusterNodesResponse, ClusterStatusResponse } from './types'
+import type { LoginRequest, LoginResponse, ChangePasswordRequest, JobsResponse, PageResult, LogsQuery, TaskTypeList, JobExecLog, StatsOverview, DailyStatList, TaskRankList, StatsQuery, DeleteLogsResponse, UserListResponse, UserView, CreateUserRequest, UpdateUserRequest, ClusterNodesResponse, ClusterStatusResponse, JobDef, JobDefListResponse, SimpleResponse, CronPreviewRequest, CronPreviewResponse } from './types'
 
 // 认证
 export function login(req: LoginRequest): Promise<LoginResponse> {
@@ -26,6 +26,31 @@ export function resumeJob(taskType: string): Promise<{ task_type: string; paused
 
 export function runJob(taskType: string): Promise<{ task_type: string; trigger_type: string; message: string }> {
   return apiFetch(`/jobs/${encodeURIComponent(taskType)}/run`, { method: 'POST' })
+}
+
+// 可视化编辑 jobs.yaml：增删改查（改动后调度内核通过 fsnotify 热重载，无需重启）
+export function getJobsRaw(): Promise<JobDefListResponse> {
+  return apiFetch<JobDefListResponse>('/jobs/raw')
+}
+export function createJob(payload: JobDef): Promise<SimpleResponse> {
+  return apiFetch<SimpleResponse>('/jobs', { method: 'POST', body: JSON.stringify(payload) })
+}
+export function updateJob(taskType: string, payload: JobDef): Promise<SimpleResponse> {
+  return apiFetch<SimpleResponse>(`/jobs/${encodeURIComponent(taskType)}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+export function deleteJob(taskType: string): Promise<SimpleResponse> {
+  return apiFetch<SimpleResponse>(`/jobs/${encodeURIComponent(taskType)}`, { method: 'DELETE' })
+}
+
+// 预览 cron 表达式的最近几次执行时间（时区与调度内核一致：Asia/Shanghai）
+export function previewCron(payload: CronPreviewRequest): Promise<CronPreviewResponse> {
+  return apiFetch<CronPreviewResponse>('/jobs/cron-preview', {
+    method: 'POST',
+    body: JSON.stringify({ cron: payload.cron, count: payload.count ?? 5 }),
+  })
 }
 
 // 日志查询

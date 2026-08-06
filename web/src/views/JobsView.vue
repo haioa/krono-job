@@ -2,9 +2,12 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 
-import { getJobs, pauseJob, resumeJob, runJob } from '@/api'
+import { getJobs, getJobsRaw, pauseJob, resumeJob, runJob, deleteJob } from '@/api'
 import { ApiError } from '@/api/http'
-import type { JobView } from '@/api/types'
+import type { JobView, JobDef } from '@/api/types'
+
+import JobFormDialog from '@/components/job/JobFormDialog.vue'
+import ConfirmDialog from '@/components/ConfirmDialog.vue'
 
 const router = useRouter()
 
@@ -79,6 +82,56 @@ function viewLogs(job: JobView) {
   router.push({ name: 'logs', query: { task_type: job.task_type } })
 }
 
+// ---------- 可视化编辑：新建 / 编辑 / 删除 ----------
+const formOpen = ref(false)
+const editingJob = ref<JobDef | null>(null)
+const confirmOpen = ref(false)
+const deletingJob = ref<JobView | null>(null)
+
+function openCreate() {
+  editingJob.value = null
+  formOpen.value = true
+}
+
+// 编辑：从完整定义（含 comment）中加载该任务，回填到表单。
+async function openEdit(job: JobView) {
+  error.value = ''
+  try {
+    const res = await getJobsRaw()
+    const def = res.list.find((d) => d.task_type === job.task_type) || null
+    editingJob.value = def
+    formOpen.value = true
+  } catch (e) {
+    error.value = e instanceof ApiError ? e.message : '加载任务定义失败'
+  }
+}
+
+function onSaved() {
+  notice.value = '已保存，调度内核将通过热重载生效（无需重启）'
+  load()
+}
+
+function askDelete(job: JobView) {
+  deletingJob.value = job
+  confirmOpen.value = true
+}
+
+async function confirmDelete() {
+  if (!deletingJob.value) return
+  const tt = deletingJob.value.task_type
+  error.value = ''
+  try {
+    await deleteJob(tt)
+    notice.value = `已删除任务 ${tt}`
+    await load()
+  } catch (e) {
+    error.value = e instanceof ApiError ? e.message : '删除失败'
+  } finally {
+    confirmOpen.value = false
+    deletingJob.value = null
+  }
+}
+
 onMounted(load)
 </script>
 
@@ -89,6 +142,10 @@ onMounted(load)
         <button class="btn" :disabled="loading" @click="load">
           <svg :class="{ spin: loading }" viewBox="0 0 24 24" width="15" height="15"><path d="M20 11a8 8 0 1 0-2 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M20 5v6h-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
           刷新
+        </button>
+        <button class="btn primary" @click="openCreate">
+          <svg viewBox="0 0 24 24" width="15" height="15"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+          新建任务
         </button>
       </div>
     </header>
@@ -215,6 +272,20 @@ onMounted(load)
                   </button>
                   <button
                     class="icon-btn"
+                    :title="`编辑 ${job.task_type}`"
+                    @click="openEdit(job)"
+                  >
+                    <svg viewBox="0 0 24 24" width="15" height="15"><path d="M4 20h4L19 9l-4-4L4 16z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M14 6l4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                  </button>
+                  <button
+                    class="icon-btn danger"
+                    :title="`删除 ${job.task_type}`"
+                    @click="askDelete(job)"
+                  >
+                    <svg viewBox="0 0 24 24" width="15" height="15"><path d="M5 7h14M9 7V5h6v2M7 7l1 13h8l1-13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  </button>
+                  <button
+                    class="icon-btn"
                     :title="`查看 ${job.task_type} 的执行日志`"
                     @click="viewLogs(job)"
                   >
@@ -235,6 +306,23 @@ onMounted(load)
         </table>
       </div>
     </section>
+
+    <JobFormDialog
+      :open="formOpen"
+      :job="editingJob"
+      @close="formOpen = false"
+      @saved="onSaved"
+    />
+
+    <ConfirmDialog
+      :open="confirmOpen"
+      title="删除任务"
+      :message="deletingJob ? `确认删除任务「${deletingJob.name || deletingJob.task_type}」？该操作会改写 jobs.yaml 并热重载，不可撤销。` : ''"
+      confirm-text="删除"
+      :danger="true"
+      @confirm="confirmDelete"
+      @update:open="confirmOpen = $event"
+    />
   </div>
 </template>
 
@@ -392,6 +480,15 @@ onMounted(load)
   background: var(--primary);
   color: #fff;
   border-color: var(--primary);
+}
+.icon-btn.danger {
+  color: var(--danger, #ef4444);
+  border-color: #fca5a5;
+}
+.icon-btn.danger:hover:not(:disabled) {
+  background: #fef2f2;
+  border-color: #ef4444;
+  color: #ef4444;
 }
 .icon-btn:disabled {
   opacity: 0.55;
