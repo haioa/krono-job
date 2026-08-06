@@ -61,12 +61,18 @@ const freqTemplates = [
 ]
 
 // 把单个 cron 字段解析成中文描述片段
-// 返回 { kind: 'every'|'step'|'list'|'range'|'raw', text }
-function parseField(seg: string, min: number, max: number) {
-  if (seg === '*') return { kind: 'every' as const }
+type Field =
+  | { kind: 'every' }
+  | { kind: 'step'; step: number }
+  | { kind: 'list'; nums: number[] }
+  | { kind: 'range'; nums: number[] }
+  | { kind: 'raw'; raw: string }
+
+function parseField(seg: string, min: number, max: number): Field {
+  if (seg === '*') return { kind: 'every' }
   if (seg.startsWith('*/')) {
     const step = Number(seg.slice(2))
-    return { kind: 'step' as const, step: step > 0 ? step : 1 }
+    return { kind: 'step', step: step > 0 ? step : 1 }
   }
   // 列表或区间：拆成逗号分隔的每一项，支持 a-b / a-b/c
   const parts = seg.split(',').map((s) => s.trim()).filter(Boolean)
@@ -74,10 +80,13 @@ function parseField(seg: string, min: number, max: number) {
     const nums: number[] = []
     let rangeHit = false
     for (const part of parts) {
-      const [base, stepStr] = part.split('/')
+      const [baseRaw, stepStr] = part.split('/')
+      const base = baseRaw ?? ''
       const step = stepStr ? Number(stepStr) : 1
       if (base.includes('-')) {
-        const [a, b] = base.split('-').map(Number)
+        const [aRaw, bRaw] = base.split('-')
+        const a = Number(aRaw)
+        const b = Number(bRaw)
         for (let n = a; n <= b; n += step) nums.push(n)
         rangeHit = true
       } else {
@@ -85,10 +94,10 @@ function parseField(seg: string, min: number, max: number) {
       }
     }
     nums.sort((a, b) => a - b)
-    if (rangeHit) return { kind: 'range' as const, nums }
-    return { kind: 'list' as const, nums }
+    if (rangeHit) return { kind: 'range', nums }
+    return { kind: 'list', nums }
   }
-  return { kind: 'raw' as const, raw: seg }
+  return { kind: 'raw', raw: seg }
 }
 
 // 单位中文
@@ -114,7 +123,7 @@ function cronExplain(cron: string): string {
   if (!cron) return ''
   const p = cron.trim().split(/\s+/)
   if (p.length !== 5) return '（格式：分 时 日 月 周，用空格分隔）'
-  const [miS, hhS, ddS, moS, dwS] = p
+  const [miS, hhS, ddS, moS, dwS] = p as [string, string, string, string, string]
 
   const mi = parseField(miS, 0, 59)
   const hh = parseField(hhS, 0, 23)
@@ -128,8 +137,8 @@ function cronExplain(cron: string): string {
 
   // 时间描述（时 + 分）
   // 取首个被指定的分钟/小时用于「X点Y分」
-  const firstMi = mi.kind === 'list' ? mi.nums[0] : mi.kind === 'range' ? mi.nums[0] : 0
-  const firstHh = hh.kind === 'list' ? hh.nums[0] : hh.kind === 'range' ? hh.nums[0] : 0
+  const firstMi = (mi.kind === 'list' || mi.kind === 'range') && mi.nums.length ? (mi.nums[0] ?? 0) : 0
+  const firstHh = (hh.kind === 'list' || hh.kind === 'range') && hh.nums.length ? (hh.nums[0] ?? 0) : 0
 
   // 频率副词
   let freq = ''
@@ -149,11 +158,11 @@ function cronExplain(cron: string): string {
   // 日 / 月 / 周 限定
   const when: string[] = []
   if (dd.kind === 'list') when.push(`每月 ${dd.nums.join('、')} 日`)
-  else if (dd.kind === 'range') when.push(`每月 ${dd.nums[0]}~${dd.nums[dd.nums.length - 1]} 日`)
+  else if (dd.kind === 'range') when.push(`每月 ${dd.nums[0]!}~${dd.nums[dd.nums.length - 1]!} 日`)
   if (mo.kind === 'list') when.push(`${mo.nums.map((n) => n + '月').join('、')}`)
-  else if (mo.kind === 'range') when.push(`${mo.nums[0]}~${mo.nums[mo.nums.length - 1]}月`)
+  else if (mo.kind === 'range') when.push(`${mo.nums[0]!}~${mo.nums[mo.nums.length - 1]!}月`)
   if (dw.kind === 'list') when.push(`每周${dw.nums.map((n) => weekNames[n % 7]).join('、')}`)
-  else if (dw.kind === 'range') when.push(`每周${weekNames[dw.nums[0] % 7]}~${weekNames[dw.nums[dw.nums.length - 1] % 7]}`)
+  else if (dw.kind === 'range') when.push(`每周${weekNames[dw.nums[0]! % 7]}~${weekNames[dw.nums[dw.nums.length - 1]! % 7]}`)
 
   // 组合常见场景
   // 0. 每隔 N（步进）：优先处理，避免具体分支把 step 字段当成「固定值」
@@ -168,13 +177,13 @@ function cronExplain(cron: string): string {
     return '每分钟执行一次'
   // 2. 每小时整点（分固定，时 every）
   if (mi.kind !== 'every' && hh.kind === 'every' && dd.kind === 'every' && mo.kind === 'every' && dw.kind === 'every') {
-    const mins = mi.kind === 'list' ? mi.nums.join('、') + ' 分' : mi.kind === 'range' ? `${mi.nums[0]}~${mi.nums[mi.nums.length - 1]} 分` : ''
+    const mins = mi.kind === 'list' ? mi.nums.join('、') + ' 分' : mi.kind === 'range' ? `${mi.nums[0]!}~${mi.nums[mi.nums.length - 1]!} 分` : ''
     return `每小时的 ${mins}执行`
   }
   // 3. 每天固定时刻（分固定、时固定、日月周 every）
   if (mi.kind !== 'every' && hh.kind !== 'every' && dd.kind === 'every' && mo.kind === 'every' && dw.kind === 'every') {
     const t = timeText(firstHh, firstMi)
-    const extra = mi.kind === 'list' ? `（${mi.nums.map((n) => pad2(n)).join('、')} 分）` : mi.kind === 'range' ? `（${mi.nums[0]}~${mi.nums[mi.nums.length - 1]} 分）` : ''
+    const extra = mi.kind === 'list' ? `（${mi.nums.map((n) => pad2(n)).join('、')} 分）` : mi.kind === 'range' ? `（${mi.nums[0]!}~${mi.nums[mi.nums.length - 1]!} 分）` : ''
     return `每天 ${t}${extra} 执行`
   }
   // 4. 每周固定时刻（周指定）
@@ -185,7 +194,7 @@ function cronExplain(cron: string): string {
   // 5. 每月固定日时刻
   if (dd.kind !== 'every' && mo.kind === 'every' && dw.kind === 'every') {
     const t = timeText(firstHh, firstMi)
-    const days = dd.kind === 'list' ? dd.nums.join('、') + ' 日' : dd.kind === 'range' ? `${dd.nums[0]}~${dd.nums[dd.nums.length - 1]} 日` : ''
+    const days = dd.kind === 'list' ? dd.nums.join('、') + ' 日' : dd.kind === 'range' ? `${dd.nums[0]!}~${dd.nums[dd.nums.length - 1]!} 日` : ''
     return `每月 ${days} ${t} 执行`
   }
   // 7. 其他：组合 when + 时间
