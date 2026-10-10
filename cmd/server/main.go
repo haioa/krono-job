@@ -218,13 +218,27 @@ func main() {
 		serveSPA(c)
 	})
 
+	// 子路径部署（server.base_path 非空，如 /krono-job）时包一层前缀处理器，
+	// 兼容两种访问方式：
+	//   1) 经 nginx 反代：网关已剥掉前缀并带上 X-Forwarded-Prefix，原样放行给 gin；
+	//   2) 直连 :10010：剥掉前缀后交给 gin，并把裸的页面请求重定向到带前缀的地址。
+	// 根路径部署时 base_path 为空，handler 就是 gin engine，行为与之前完全一致。
+	var handler http.Handler = r
+	if cfg.Server.BasePath != "" {
+		handler = basePathHandler(cfg.Server.BasePath, r)
+	}
+
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.Server.Port),
-		Handler: r,
+		Handler: handler,
 	}
 
 	go func() {
-		log.Infof("server listening on :%d", cfg.Server.Port)
+		if cfg.Server.BasePath != "" {
+			log.Infof("server listening on :%d (base path: /%s)", cfg.Server.Port, cfg.Server.BasePath)
+		} else {
+			log.Infof("server listening on :%d", cfg.Server.Port)
+		}
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("server error: %v", err)
 		}
@@ -241,6 +255,59 @@ func main() {
 		log.Errorf("graceful shutdown failed: %v", err)
 	}
 	log.Info("bye")
+}
+
+// basePathHandler 让「前后端一体」的服务同时支持子路径反代与直连访问。
+//
+// 注意：前缀剥离必须做在 gin engine 之外。gin 的路由匹配在 handler chain 执行之前就已完成，
+// 写在 gin 中间件里改 c.Request.URL.Path 不会触发重新匹配，因此这里用 net/http 层包装。
+//
+//   - /krono-job/xxx（直连带前缀）    -> 剥成 /xxx 后交给 gin
+//   - /xxx 且带 X-Forwarded-Prefix    -> 网关已剥过前缀，原样交给 gin（避免与浏览器形成 302 死循环）
+//   - / 等裸页面请求（直连）          -> 302 到 /krono-job/...
+//   - /api、/healthz、静态资源请求     -> 原样交给 gin（不跳转，避免影响接口与非 HTML 资源）
+func basePathHandler(base string, next http.Handler) http.Handler {
+	base = strings.Trim(base, "/")
+	if base == "" {
+		return next
+	}
+	prefix := "/" + base
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+
+		// 1) 带前缀：剥掉后交给 gin（直连 :10010/krono-job/... 走这里）
+		if p == prefix || strings.HasPrefix(p, prefix+"/") {
+			u := *r.URL
+			u.Path = strings.TrimPrefix(p, prefix)
+			if u.Path == "" {
+				u.Path = "/"
+			}
+			r.URL = &u
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// 2) 网关（nginx）已剥过前缀：原样放行
+		if r.Header.Get("X-Forwarded-Prefix") != "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// 3) 直连的页面导航请求：补前缀后重定向（仅 HTML 导航，避免影响接口与静态资源）
+		isHTMLNav := r.Method == http.MethodGet &&
+			strings.Contains(r.Header.Get("Accept"), "text/html")
+		if isHTMLNav && !strings.HasPrefix(p, "/api") && p != "/healthz" && !strings.Contains(p, ".") {
+			target := prefix + p
+			if r.URL.RawQuery != "" {
+				target += "?" + r.URL.RawQuery
+			}
+			http.Redirect(w, r, target, http.StatusFound)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 // serveSPA 从内嵌的 web/dist 返回静态资源；未匹配具体文件时回退 index.html

@@ -53,6 +53,8 @@ RUN chmod +x /app/entrypoint.sh /app/krono-job
 
 # ---- 平台运行环境变量（均可用 -e 覆盖；PG/Redis 均在本容器内）----
 ENV KRONO_SERVER_PORT=10010
+# 子路径部署前缀（需与 web/vite.config.ts 的 base 一致）。独立根路径部署时设为 ""。
+ENV KRONO_SERVER_BASE_PATH=/krono-job
 # Redis（内置，无密码，监听 0.0.0.0 以便同网络 asynqmon 可连）
 ENV KRONO_REDIS_ADDR=127.0.0.1:6379
 ENV KRONO_REDIS_PASSWORD=""

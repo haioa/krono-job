@@ -31,14 +31,14 @@ type JobsConfig struct {
 //   - 通过调用方主动探测感知下游被调用方（执行节点）存活，配合负载均衡实现多节点分发。
 //     下游节点【不】注册心跳（避免臃肿服务适配注册协议），存活完全由 krono-job 主动探测判定。
 type ClusterConfig struct {
-	Enabled      bool          `mapstructure:"enabled"`       // 是否启用分布式模式（false 时单节点退化运行）
-	NodeID       string        `mapstructure:"node_id"`       // 本调度节点唯一标识（缺省自动取 hostname+pid）
-	LeaderKey    string        `mapstructure:"leader_key"`    // 选主锁 Redis key，默认 krono:leader
-	LeaderTTL    time.Duration `mapstructure:"leader_ttl"`    // 选主锁 TTL，默认 10s
-	HealthKey    string        `mapstructure:"health_key"`    // 下游存活探测结果 Redis hash key，默认 krono:node_health
-	ProbeTimeout   time.Duration `mapstructure:"probe_timeout"`     // 下游存活探测超时，默认 2s
-	DefaultLB      string        `mapstructure:"default_lb"`        // 任务未显式指定 lb_strategy 时使用的默认策略，默认 round_robin
-	SkipVerifyTLS  bool          `mapstructure:"skip_verify_tls"`   // 下游为内网自签/证书 IP 不匹配的 HTTPS 时，跳过证书校验直接访问（默认 false，保持安全）
+	Enabled       bool          `mapstructure:"enabled"`         // 是否启用分布式模式（false 时单节点退化运行）
+	NodeID        string        `mapstructure:"node_id"`         // 本调度节点唯一标识（缺省自动取 hostname+pid）
+	LeaderKey     string        `mapstructure:"leader_key"`      // 选主锁 Redis key，默认 krono:leader
+	LeaderTTL     time.Duration `mapstructure:"leader_ttl"`      // 选主锁 TTL，默认 10s
+	HealthKey     string        `mapstructure:"health_key"`      // 下游存活探测结果 Redis hash key，默认 krono:node_health
+	ProbeTimeout  time.Duration `mapstructure:"probe_timeout"`   // 下游存活探测超时，默认 2s
+	DefaultLB     string        `mapstructure:"default_lb"`      // 任务未显式指定 lb_strategy 时使用的默认策略，默认 round_robin
+	SkipVerifyTLS bool          `mapstructure:"skip_verify_tls"` // 下游为内网自签/证书 IP 不匹配的 HTTPS 时，跳过证书校验直接访问（默认 false，保持安全）
 }
 
 // Distributed 便捷判断：是否启用分布式模式。
@@ -47,7 +47,13 @@ func (c ClusterConfig) Distributed() bool {
 }
 
 type ServerConfig struct {
-	Port int
+	Port int `mapstructure:"port"`
+	// BasePath 是服务对外挂载的子路径前缀，例如 /krono-job。
+	// 由 nginx 反向代理时通常已在网关层剥掉前缀（并带 X-Forwarded-Prefix），此时可留空；
+	// 直接访问 :10010 时建议配置，服务会剥掉该前缀处理请求，并把 / 重定向到该前缀，
+	// 保证「直连」与「经网关」两种方式都能正常使用（前端需以同样的 base 构建）。
+	// 留空表示根路径部署（默认）。
+	BasePath string `mapstructure:"base_path"`
 }
 
 type RedisConfig struct {
@@ -112,6 +118,14 @@ func Load(path string) (*Config, error) {
 	applyEnvOverride(&c.Bootstrap.AdminPass, "KRONO_BOOTSTRAP_ADMIN_PASS")
 	applyEnvOverride(&c.JWT.Secret, "KRONO_JWT_SECRET")
 	applyEnvOverride(&c.Jobs.Path, "KRONO_JOBS_PATH")
+
+	// BasePath 允许显式置空（表示根路径部署），因此按「变量是否存在」而非「是否非空」覆盖。
+	// 同时做归一化：去掉首尾多余的 /，例如 "/krono-job/" -> "krono-job"。
+	if val, ok := os.LookupEnv("KRONO_SERVER_BASE_PATH"); ok {
+		c.Server.BasePath = strings.Trim(val, "/")
+	} else {
+		c.Server.BasePath = strings.Trim(c.Server.BasePath, "/")
+	}
 
 	// jobs.yaml 路径默认值（环境变量优先于默认值）。
 	if c.Jobs.Path == "" {

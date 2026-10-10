@@ -1,8 +1,12 @@
 // 轻量 API 客户端：基于原生 fetch，自动注入 Bearer Token，统一处理 401/错误。
-// 基址默认使用相对路径 /api（dev 经 Vite 代理、生产随二进制同源）；
+// 基址默认跟随部署 base（vite base，例如 /krono-job/ -> /krono-job/api）；
+// 独立根路径部署时 BASE_URL 为 '/'，即 '/api'，与旧行为一致；
 // 可用环境变量 VITE_API_BASE 覆盖（如 http://localhost:10010/api）。
 
-const BASE: string = import.meta.env.VITE_API_BASE ?? '/api'
+const BASE: string = import.meta.env.VITE_API_BASE ?? `${import.meta.env.BASE_URL}api`
+
+// 登录页地址：同样跟随部署 base，避免子路径部署时跳到站点根路径导致 404。
+const LOGIN_PATH = `${import.meta.env.BASE_URL}login`
 
 export class ApiError extends Error {
   status: number
@@ -34,8 +38,8 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
     const isLogin = path.includes('/auth/login')
     if (!isLogin) {
       localStorage.removeItem('krono_token')
-      if (window.location.pathname !== '/login') {
-        window.location.href = '/login'
+      if (window.location.pathname !== LOGIN_PATH) {
+        window.location.href = LOGIN_PATH
       }
     }
     let msg = '未授权'

@@ -345,6 +345,11 @@ function validate(): boolean {
       errors.grpc = '请填写 gRPC 服务名'
       ok = false
     }
+    const ep = f.multiNode ? parseEndpoints() : f.endpoint.trim() ? [f.endpoint.trim()] : []
+    if (ep.length === 0) {
+      errors.endpoint = '请填写 gRPC 服务地址（host:port）'
+      ok = false
+    }
   }
   return ok
 }
@@ -571,6 +576,39 @@ function close() {
             <div class="fld">
               <label class="lbl">参数类型</label>
               <input class="field" v-model="f.requestType" placeholder="例如 order.CreateRequest" />
+            </div>
+            <div class="fld">
+              <label class="lbl">服务地址 <em>*</em></label>
+              <label class="chk">
+                <input type="checkbox" v-model="f.multiNode" style="width:auto" />
+                <span>有多台服务器（负载均衡）</span>
+              </label>
+
+              <template v-if="!f.multiNode">
+                <input class="field" v-model="f.endpoint" placeholder="例如 sdc-grpc:10000 或 192.168.31.45:20001" @input="errors.endpoint = ''" />
+                <p v-if="errors.endpoint" class="err">{{ errors.endpoint }}</p>
+                <p v-else class="tip">填一台 gRPC 节点的 host:port 即可。</p>
+              </template>
+
+              <template v-else>
+                <div class="rows">
+                  <div v-for="(r, i) in endpointRows" :key="i" class="row">
+                    <input class="field" v-model="r.key" placeholder="例如 192.168.31.45:20001" @input="errors.endpoint = ''" />
+                    <button type="button" class="btn btn-sm btn-ghost danger" @click="delRow(endpointRows, i)">移除</button>
+                  </div>
+                </div>
+                <button type="button" class="btn btn-sm btn-ghost" @click="addRow(endpointRows)">+ 再添加一台服务器</button>
+                <p v-if="errors.endpoint" class="err" style="margin-top:6px">{{ errors.endpoint }}</p>
+                <div class="fld inline" style="margin-top: 10px" v-if="f.multiNode">
+                  <label class="lbl" style="margin:0">多台之间如何分配</label>
+                  <select class="field" v-model="f.lb" style="max-width:200px">
+                    <option value="round_robin">轮流（每台轮流来）</option>
+                    <option value="least_conn">挑最闲的</option>
+                    <option value="random">随机</option>
+                    <option value="consistent">按内容固定</option>
+                  </select>
+                </div>
+              </template>
             </div>
             <div class="fld">
               <label class="lbl">附加信息 metadata（可选）</label>

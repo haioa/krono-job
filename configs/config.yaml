@@ -11,6 +11,10 @@
 
 server:
   port: 10010                    # KRONO_SERVER_PORT
+  # 子路径部署前缀（与前端 vite base 保持一致）。留空=根路径部署。
+  # 置空请用环境变量 KRONO_SERVER_BASE_PATH=""（按变量是否存在覆盖，空值有效）。
+  # 详见 cmd/server/main.go 的 basePathHandler：经 nginx 反代或直连 :10010 均可正常访问。
+  base_path: "/krono-job"        # KRONO_SERVER_BASE_PATH
 
 redis:
   addr: "127.0.0.1:6379"         # KRONO_REDIS_ADDR
