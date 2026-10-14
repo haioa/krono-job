@@ -46,6 +46,11 @@ func Invoke(ctx context.Context, def scheduler.JobDef, conn *grpc.ClientConn) (*
 	if err != nil {
 		return nil, fmt.Errorf("marshal payload: %w", err)
 	}
+	// payload 缺省或为空（nil map）时 json.Marshal 输出 "null"，protojson 无法解析
+	// （unexpected token null），统一兜底为 "{}"（空消息）
+	if len(payloadJSON) == 0 || string(payloadJSON) == "null" {
+		payloadJSON = []byte("{}")
+	}
 	if err := protojson.Unmarshal(payloadJSON, req); err != nil {
 		return nil, fmt.Errorf("protojson unmarshal into %q: %w", def.RequestType, err)
 	}

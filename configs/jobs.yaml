@@ -3,6 +3,12 @@
 # 字段说明见 PLAN.md §5.3。${ENV} 在启动时替换为环境变量（headers/metadata/endpoint 等）。
 # 修改本文件后无需重启服务：调度内核通过 fsnotify 热重载（增/删/改自动生效）。
 # 若 YAML 解析失败，保留上次有效配置并记错误日志，不影响运行。
+#
+# payload 分层约定（管理后台可视化编辑产生的格式）：
+#   payload.path   路径参数，替换 endpoint 中的 {id} 占位符（自动 URL 编码）
+#   payload.query  查询参数，拼接到 URL 的 ?a=1&b=2（GET 传参方式）
+#   payload.body   请求体，整体作为 JSON body 发送
+# 旧格式（payload 中无 path/query/body 键）：整个 payload 作为 JSON body，向后兼容
 
 jobs:
   # ---- HTTP 任务示例（纯配置，无需写对接代码）----

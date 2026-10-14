@@ -32,7 +32,11 @@ const headerComment = `# krono-job 调度任务定义（声明式，不落库）
 #   lb_strategy 负载均衡策略 round_robin | least_conn | random | consistent
 #   method      HTTP 方法 GET | POST 等（protocol=http 时有效）
 #   headers     HTTP 请求头（支持 ${ENV} 引用环境变量）
-#   payload     请求体参数（gRPC 按 request_type 反序列化；HTTP 作为 JSON body）
+#   payload     请求体参数（分层约定，可视化编辑产生）：
+#                payload.path   路径参数，替换 endpoint 中的 {id} 占位符（自动 URL 编码）
+#                payload.query  查询参数，拼接到 URL 的 ?a=1&b=2（GET 传参方式）
+#                payload.body   请求体，整体作为 JSON body 发送
+#                旧格式（无 path/query/body 键）：整个 payload 作为 JSON body，向后兼容
 #   grpc_service / grpc_method / request_type  gRPC 调用描述（protocol=grpc 时有效）
 #   metadata    gRPC metadata（支持 ${ENV}）
 #   comment     本条任务的备注（仅用于人工维护，不进入调度逻辑）
